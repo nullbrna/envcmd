@@ -86,30 +86,26 @@ fn is_directory(target: &str) -> bool {
 
 fn is_branch(target: &str) -> bool {
   let Ok(child) = Command::new("git")
-    .args(["rev-parse", "--abbrev-ref", "HEAD"])
+    .arg("rev-parse")
+    .arg("--abbrev-ref")
+    .arg("HEAD")
     .output()
   else {
     return false;
   };
 
-  if child.status.success() {
-    return String::from_utf8_lossy(&child.stdout)
-      .trim()
-      .eq_ignore_ascii_case(target);
-  }
-
-  false
+  return String::from_utf8_lossy(&child.stdout)
+    .trim()
+    .eq_ignore_ascii_case(target);
 }
 
 fn start(kind: Kind, target: &str, commands: Vec<&str>) {
-  let matches = match kind {
+  if !match kind {
     Kind::Directory => is_directory(target),
     Kind::Branch => is_branch(target),
-  };
-
-  if !matches {
+  } {
     return;
-  }
+  };
 
   log!(INFO, "[+] {target}");
   for (idx, cmd) in commands.iter().enumerate() {
@@ -130,16 +126,16 @@ fn main() {
     };
 
     let mut parts = key.split(SPACE);
-    let commands = value.split(DELIM).collect();
     let (kind, target) = (parts.next(), parts.next());
 
-    if let Some(Some(kind)) = kind.map(kind_from_str)
+    if let Some(kind) = kind.and_then(kind_from_str)
       && let Some(target) = target
     {
+      let commands = value.split(DELIM).collect();
       start(kind, target, commands);
       continue;
     }
 
-    log!(ERROR, "unknown format: {key}");
+    log!(ERROR, "unrecognised format: {key}");
   }
 }
