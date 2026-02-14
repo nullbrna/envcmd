@@ -5,6 +5,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
+use std::thread::spawn;
 
 const COLOUR: [&str; 3] = [
   "\x1b[94m", // Bright Blue
@@ -43,14 +44,14 @@ fn kind_from_str(source: &str) -> Option<Kind> {
 
 fn run_command(idx: usize, command: &str) {
   let cmd = format!("{command} 2>&1");
-  let pipeout = Stdio::piped();
+  let output = Stdio::piped();
 
   log!(COLOUR, idx, "[+] {command}");
 
   let Ok(mut child) = Command::new("sh")
     .arg("-c")
     .arg(&cmd)
-    .stdout(pipeout)
+    .stdout(output)
     .spawn()
   else {
     log!(ERROR, "[{idx}] unable to start");
@@ -75,13 +76,12 @@ fn run_command(idx: usize, command: &str) {
 }
 
 fn is_directory(target: &str) -> bool {
-  let is_match = |path: PathBuf| {
-    path
-      .file_name()
-      .is_some_and(|name| name.eq_ignore_ascii_case(target))
+  let is_name_match = |path: PathBuf| {
+    let folder = path.file_name();
+    folder.is_some_and(|name| name.eq_ignore_ascii_case(target))
   };
 
-  current_dir().is_ok_and(is_match)
+  current_dir().is_ok_and(is_name_match)
 }
 
 fn is_branch(target: &str) -> bool {
@@ -99,24 +99,51 @@ fn is_branch(target: &str) -> bool {
     .eq_ignore_ascii_case(target);
 }
 
-fn start(kind: Kind, target: &str, commands: Vec<&str>) {
-  if !match kind {
-    Kind::Directory => is_directory(target),
-    Kind::Branch => is_branch(target),
-  } {
-    return;
-  };
+fn run_async(commands: Vec<&str>) {
+  let cap = commands.len();
+  let mut handles = Vec::with_capacity(cap);
 
-  log!(INFO, "[+] {target}");
-  for (idx, cmd) in commands.iter().enumerate() {
-    run_command(idx, cmd);
+  for (idx, cmd) in commands.into_iter().enumerate() {
+    let cmd = cmd.to_owned();
+    let handle = spawn(move || run_command(idx, &cmd));
+    handles.push(handle);
   }
 
-  log!(INFO, "[-] {target}")
+  for handle in handles {
+    let _ = handle.join();
+  }
+}
+
+fn run_sync(commands: Vec<&str>) {
+  commands
+    .into_iter()
+    .enumerate()
+    .for_each(|(idx, cmd)| run_command(idx, cmd));
+}
+
+fn start(kind: Kind, target: &str, commands: Vec<&str>, is_async: bool) {
+  let is_kind_match = match kind {
+    Kind::Directory => is_directory(target),
+    Kind::Branch => is_branch(target),
+  };
+
+  if !is_kind_match {
+    return;
+  }
+
+  log!(INFO, "[+] {target}");
+
+  match is_async {
+    true => run_async(commands),
+    false => run_sync(commands),
+  }
+
+  log!(INFO, "[-] {target}");
 }
 
 fn main() {
   const START: &str = "EC_";
+  const ASYNC: &str = "ASYNC_";
   const SPACE: &str = "_";
   const DELIM: &str = ",";
 
@@ -125,17 +152,18 @@ fn main() {
       continue;
     };
 
+    let is_async = key.starts_with(ASYNC);
+    let key = key.strip_prefix(ASYNC).unwrap_or(key);
+
     let mut parts = key.split(SPACE);
     let (kind, target) = (parts.next(), parts.next());
 
-    if let Some(kind) = kind.and_then(kind_from_str)
-      && let Some(target) = target
-    {
-      let commands = value.split(DELIM).collect();
-      start(kind, target, commands);
+    let (Some(kind), Some(target)) = (kind.and_then(kind_from_str), target) else {
+      log!(ERROR, "unrecognised format: {key}");
       continue;
-    }
+    };
 
-    log!(ERROR, "unrecognised format: {key}");
+    let commands = value.split(DELIM).collect();
+    start(kind, target, commands, is_async);
   }
 }
