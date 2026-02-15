@@ -43,6 +43,8 @@ fn kind_from_str(source: &str) -> Option<Kind> {
 }
 
 fn run_command(idx: usize, command: &str) {
+  // Combine both STDOUT & STDERR into one stream. Some applications use STDERR
+  // for their standard logs e.g docker-compose.
   let cmd = format!("{command} 2>&1");
   let output = Stdio::piped();
 
@@ -99,7 +101,21 @@ fn is_branch(target: &str) -> bool {
     .eq_ignore_ascii_case(target);
 }
 
-fn run_async(commands: Vec<&str>) {
+fn start(kind: Kind, target: &str, commands: Vec<&str>, is_async: bool) {
+  let is_kind_match = match kind {
+    Kind::Directory => is_directory(target),
+    Kind::Branch => is_branch(target),
+  };
+
+  if !is_kind_match {
+    return;
+  } else if !is_async {
+    return commands
+      .into_iter()
+      .enumerate()
+      .for_each(|(idx, cmd)| run_command(idx, cmd));
+  }
+
   let cap = commands.len();
   let mut handles = Vec::with_capacity(cap);
 
@@ -110,35 +126,9 @@ fn run_async(commands: Vec<&str>) {
   }
 
   for handle in handles {
-    let _ = handle.join();
+    // NOTE: Each spawned thread reasonably handles panics.
+    handle.join().expect("thread panic");
   }
-}
-
-fn run_sync(commands: Vec<&str>) {
-  commands
-    .into_iter()
-    .enumerate()
-    .for_each(|(idx, cmd)| run_command(idx, cmd));
-}
-
-fn start(kind: Kind, target: &str, commands: Vec<&str>, is_async: bool) {
-  let is_kind_match = match kind {
-    Kind::Directory => is_directory(target),
-    Kind::Branch => is_branch(target),
-  };
-
-  if !is_kind_match {
-    return;
-  }
-
-  log!(INFO, "[+] {target}");
-
-  match is_async {
-    true => run_async(commands),
-    false => run_sync(commands),
-  }
-
-  log!(INFO, "[-] {target}");
 }
 
 fn main() {
@@ -152,13 +142,12 @@ fn main() {
       continue;
     };
 
+    // Check for ASYNC_* and remove. Regardless, the resulting format is
+    // <KIND>_<TARGET> with <START> & <ASYNC> stripped.
     let is_async = key.starts_with(ASYNC);
-    let key = key.strip_prefix(ASYNC).unwrap_or(key);
+    let mut parts = key.strip_prefix(ASYNC).unwrap_or(key).split(SPACE);
 
-    let mut parts = key.split(SPACE);
-    let (kind, target) = (parts.next(), parts.next());
-
-    let (Some(kind), Some(target)) = (kind.and_then(kind_from_str), target) else {
+    let (Some(kind), Some(target)) = (parts.next().and_then(kind_from_str), parts.next()) else {
       log!(ERROR, "unrecognised format: {key}");
       continue;
     };
