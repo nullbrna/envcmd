@@ -16,17 +16,6 @@ var colours = []string{
     "\x1b[96m", // Bright Cyan
 }
 
-type Kind string
-
-const (
-    dir Kind = "DIR"
-    bra Kind = "BRA"
-)
-
-func (this Kind) Valid() bool {
-    return this == dir || this == bra
-}
-
 func logInfo(format string, args ...any) {
     text := fmt.Sprintf(format, args...)
     fmt.Printf("[\x1b[32mI\x1b[0m] %s\n", text)
@@ -42,17 +31,22 @@ func logColour(idx int, format string, args ...any) {
     fmt.Printf("[%s%d\x1b[0m] %s\n", colours[idx%len(colours)], idx, text)
 }
 
-func validation(segments []string, kind Kind, async bool) error {
-    if async && segments[1] != "ASYNC" {
-        return fmt.Errorf("expected <ASYNC> instead of %s", segments[1])
-    } else if !kind.Valid() {
-        return fmt.Errorf("unknown <KIND> value of %s", kind)
-    }
+type Kind string
 
-    return nil
+const (
+    dir Kind = "DIR"
+    bra Kind = "BRA"
+)
+
+func (this Kind) Valid() bool {
+    return this == dir || this == bra
 }
 
-func isDirectory(target string) bool {
+func (this Kind) isDirectory(target string) bool {
+    if this != dir {
+        return false
+    }
+
     dir, err := os.Getwd()
     if err != nil {
         logError("retrieving directory: %s", err)
@@ -62,7 +56,11 @@ func isDirectory(target string) bool {
     return strings.EqualFold(filepath.Base(dir), target)
 }
 
-func isBranch(target string) bool {
+func (this Kind) isBranch(target string) bool {
+    if this != bra {
+        return false
+    }
+
     out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
     if err != nil {
         logError("retrieving branch: %s", err)
@@ -73,55 +71,74 @@ func isBranch(target string) bool {
     return strings.EqualFold(strings.TrimSpace(str), target)
 }
 
-func run(wg *sync.WaitGroup, idx int, command string) {
+type Entry struct {
+    async    bool
+    kind     Kind
+    target   string
+    commands []string
+}
+
+func (this *Entry) Validate(segments []string) error {
+    if this.async && segments[1] != "ASYNC" {
+        return fmt.Errorf("expected <ASYNC> instead of %s", segments[1])
+    } else if !this.kind.Valid() {
+        return fmt.Errorf("unknown <KIND> value of %s", this.kind)
+    }
+
+    return nil
+}
+
+func (this *Entry) Start() {
+    if !this.kind.isDirectory(this.target) && !this.kind.isBranch(this.target) {
+        return
+    }
+
+    count := len(this.commands)
+    var wg sync.WaitGroup
+    wg.Add(count)
+
+    for idx := 0; idx < count; idx++ {
+        cmd := this.commands[idx]
+
+        if this.async {
+            go runCommand(&wg, idx, cmd)
+        } else {
+            runCommand(&wg, idx, cmd)
+        }
+    }
+
+    wg.Wait()
+}
+
+func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
     defer wg.Done()
 
-    logInfo("[+] %s", command)
-    cmd := exec.Command("sh", "-c", command+" "+"2>&1")
+    logInfo("[+] %s", cmd)
+    piped := fmt.Sprintf("%s 2>&1", cmd)
+    child := exec.Command("sh", "-c", piped)
 
-    stdout, err := cmd.StdoutPipe()
+    out, err := child.StdoutPipe()
     if err != nil {
         logError("[%d] reading stdout: %v", idx, err)
         return
     }
 
-    if err := cmd.Start(); err != nil {
+    if err := child.Start(); err != nil {
         logError("[%d] unable to start: %v", idx, err)
         return
     }
 
-    reader := bufio.NewScanner(stdout)
+    reader := bufio.NewScanner(out)
     for reader.Scan() {
         logColour(idx, "%s", reader.Text())
     }
 
-    if err := cmd.Wait(); err != nil {
+    if err := child.Wait(); err != nil {
         logError("[%d] awaiting completion: %v", idx, err)
         return
     }
 
-    logInfo("[-] %s", command)
-}
-
-func start(kind Kind, target string, async bool, commands []string) {
-    if (kind == dir && !isDirectory(target)) || (kind == bra && !isBranch(target)) {
-        return
-    }
-
-    var wg sync.WaitGroup
-    for idx := 0; idx < len(commands); idx++ {
-        wg.Add(1)
-        cmd := commands[idx]
-
-        if async {
-            go run(&wg, idx, cmd)
-            continue
-        }
-
-        run(&wg, idx, cmd)
-    }
-
-    wg.Wait()
+    logInfo("[-] %s", cmd)
 }
 
 func main() {
@@ -143,13 +160,18 @@ func main() {
             continue
         }
 
-        kind, target, async := Kind(segments[length-2]), segments[length-1], length == 4
-        if err := validation(segments, kind, async); err != nil {
+        entry := Entry{
+            async:    length == 4,
+            kind:     Kind(segments[length-2]),
+            target:   segments[length-1],
+            commands: strings.Split(val, ","),
+        }
+
+        if err := entry.Validate(segments); err != nil {
             logError("invalid key: %s", err)
             continue
         }
 
-        commands := strings.Split(val, ",")
-        start(kind, target, async, commands)
+        entry.Start()
     }
 }
