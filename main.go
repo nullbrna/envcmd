@@ -10,6 +10,7 @@ import (
     "sync"
 )
 
+var version = "v0.0.0"
 var colours = []string{
     "\x1b[94m", // Bright Blue
     "\x1b[95m", // Bright Magenta
@@ -34,16 +35,16 @@ func logColour(idx int, format string, args ...any) {
 type Kind string
 
 const (
-    dir Kind = "DIR"
-    bra Kind = "BRA"
+    directory Kind = "DIR"
+    branch    Kind = "BRA"
 )
 
-func (this Kind) Valid() bool {
-    return this == dir || this == bra
+func (this Kind) Invalid() bool {
+    return this != directory && this != branch
 }
 
-func (this Kind) isDirectory(target string) bool {
-    if this != dir {
+func (this Kind) IsDirectory(target string) bool {
+    if this != directory {
         return false
     }
 
@@ -56,8 +57,8 @@ func (this Kind) isDirectory(target string) bool {
     return strings.EqualFold(filepath.Base(dir), target)
 }
 
-func (this Kind) isBranch(target string) bool {
-    if this != bra {
+func (this Kind) IsBranch(target string) bool {
+    if this != branch {
         return false
     }
 
@@ -81,7 +82,7 @@ type Entry struct {
 func (this *Entry) Validate(segments []string) error {
     if this.async && segments[1] != "ASYNC" {
         return fmt.Errorf("expected <ASYNC> instead of %s", segments[1])
-    } else if !this.kind.Valid() {
+    } else if this.kind.Invalid() {
         return fmt.Errorf("unknown <KIND> value of %s", this.kind)
     }
 
@@ -89,17 +90,17 @@ func (this *Entry) Validate(segments []string) error {
 }
 
 func (this *Entry) Start() {
-    if !this.kind.isDirectory(this.target) && !this.kind.isBranch(this.target) {
+    if !this.kind.IsDirectory(this.target) && !this.kind.IsBranch(this.target) {
         return
     }
 
-    count := len(this.commands)
     var wg sync.WaitGroup
-    wg.Add(count)
-
-    for idx := 0; idx < count; idx++ {
+    for idx := 0; idx < len(this.commands); idx++ {
         cmd := this.commands[idx]
 
+        // NOTE: Useless WaitGroup for synchronous branch. Code is simpler and
+        // performance hit is negligible.
+        wg.Add(1)
         if this.async {
             go runCommand(&wg, idx, cmd)
         } else {
@@ -142,8 +143,9 @@ func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
 }
 
 func main() {
-    envs := os.Environ()
+    logInfo("envcmd %s", version)
 
+    envs := os.Environ()
     for idx := 0; idx < len(envs); idx++ {
         segments := strings.SplitN(envs[idx], "=", 2)
 

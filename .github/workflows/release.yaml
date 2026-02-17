@@ -1,0 +1,47 @@
+name: Release
+
+on:
+    push:
+        tags:
+            - "v*"
+
+permissions:
+    contents: write
+
+jobs:
+    release:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Go
+              uses: actions/setup-go@v5
+              with:
+                  go-version-file: go.mod
+                  cache: true
+
+            - name: Version
+              id: vars
+              run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+            - name: Build
+              env:
+                  CGO_ENABLED: 0
+                  GOOS: darwin
+                  GOARCH: arm64
+              run: |
+                  VERSION=${{ steps.vars.outputs.VERSION }}
+                  ARCHIVE=envcmd_${VERSION}_darwin_arm64
+
+                  go build -ldflags="-s -w -X main.version=${VERSION}" -o envcmd
+
+                  mkdir -p dist && tar -czf dist/${ARCHIVE}.tar.gz envcmd
+                  echo "SHA256:" && shasum -a 256 dist/${ARCHIVE}.tar.gz | awk '{print $1}'
+
+            - name: Create Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: |
+                      dist/*.tar.gz
