@@ -1,0 +1,13 @@
+[
+    {
+        "label": "Debug Go",
+        "request": "launch",
+        "adapter": "Delve",
+        "mode": "debug",
+        "program": ".",
+        "env": {
+            "EVC_ASYNC_DIR_ENVCMD": "echo 'one',echo 'two'",
+            "EVC_BRA_MAIN": "echo 'foo',echo 'bar'",
+        },
+    },
+]

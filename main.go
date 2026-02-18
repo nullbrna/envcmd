@@ -6,115 +6,58 @@ import (
     "os"
     "os/exec"
     "path/filepath"
+    "strconv"
     "strings"
     "sync"
 )
 
 var version = "v0.0.0"
-var colours = []string{
-    "\x1b[94m", // Bright Blue
-    "\x1b[95m", // Bright Magenta
-    "\x1b[96m", // Bright Cyan
-}
 
-func logInfo(format string, args ...any) {
-    text := fmt.Sprintf(format, args...)
-    fmt.Printf("[\x1b[32mI\x1b[0m] %s\n", text)
-}
+// Bright Blue, Bright Magenta, Bright Cyan
+var colours = []string{"94m", "95m", "96m"}
 
 func logError(format string, args ...any) {
-    text := fmt.Sprintf(format, args...)
-    fmt.Fprintf(os.Stderr, "[\x1b[31mE\x1b[0m] %s\n", text)
+    fmt.Fprintf(os.Stderr, "\x1b[31mE\x1b[0m "+format+"\n", args...)
+}
+
+func logMuted(prefix, format string, args ...any) {
+    fmt.Printf("\x1b[90m"+prefix+" "+format+"\x1b[0m\n", args...)
 }
 
 func logColour(idx int, format string, args ...any) {
-    text := fmt.Sprintf(format, args...)
-    fmt.Printf("[%s%d\x1b[0m] %s\n", colours[idx%len(colours)], idx, text)
+    colour, prefix := colours[idx%len(colours)], strconv.Itoa(idx)
+    fmt.Printf("\x1b["+colour+prefix+"\x1b[0m "+format+"\n", args...)
 }
 
-type Kind string
-
-const (
-    directory Kind = "DIR"
-    branch    Kind = "BRA"
-)
-
-func (this Kind) Invalid() bool {
-    return this != directory && this != branch
-}
-
-func (this Kind) IsDirectory(target string) bool {
-    if this != directory {
-        return false
-    }
-
+func isDirMatch(target string) bool {
     dir, err := os.Getwd()
     if err != nil {
-        logError("retrieving directory: %s", err)
+        logError("reading directory: %v", err)
         return false
     }
 
+    // NOTE: Case-insensitive comparison.
     return strings.EqualFold(filepath.Base(dir), target)
 }
 
-func (this Kind) IsBranch(target string) bool {
-    if this != branch {
-        return false
-    }
-
+func isBraMatch(target string) bool {
     out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
     if err != nil {
-        logError("retrieving branch: %s", err)
+        logError("reading branch: %v", err)
         return false
     }
 
     str := string(out)
+    // NOTE: Case-insensitive comparison.
     return strings.EqualFold(strings.TrimSpace(str), target)
-}
-
-type Entry struct {
-    async    bool
-    kind     Kind
-    target   string
-    commands []string
-}
-
-func (this *Entry) Validate(segments []string) error {
-    if this.async && segments[1] != "ASYNC" {
-        return fmt.Errorf("expected <ASYNC> instead of %s", segments[1])
-    } else if this.kind.Invalid() {
-        return fmt.Errorf("unknown <KIND> value of %s", this.kind)
-    }
-
-    return nil
-}
-
-func (this *Entry) Start() {
-    if !this.kind.IsDirectory(this.target) && !this.kind.IsBranch(this.target) {
-        return
-    }
-
-    var wg sync.WaitGroup
-    for idx := 0; idx < len(this.commands); idx++ {
-        cmd := this.commands[idx]
-
-        // NOTE: Useless WaitGroup for synchronous branch. Code is simpler and
-        // performance hit is negligible.
-        wg.Add(1)
-        if this.async {
-            go runCommand(&wg, idx, cmd)
-        } else {
-            runCommand(&wg, idx, cmd)
-        }
-    }
-
-    wg.Wait()
 }
 
 func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
     defer wg.Done()
+    logMuted("+", "[%d] %s", idx, cmd)
 
-    logInfo("[+] %s", cmd)
+    // Combine both STDOUT & STDERR streams into one. Some use STDERR for
+    // non-error logs e.g docker-compose.
     piped := fmt.Sprintf("%s 2>&1", cmd)
     child := exec.Command("sh", "-c", piped)
 
@@ -139,38 +82,91 @@ func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
         return
     }
 
-    logInfo("[-] %s", cmd)
+    logMuted("-", "[%d] %s", idx, cmd)
+}
+
+type Entry struct {
+    async        bool
+    kind, target string
+    commands     []string
+}
+
+func (this *Entry) MutBuild(key, val string) error {
+    const asy = "ASYNC_"
+    const dir = "DIR_"
+    const bra = "BRA_"
+
+    unchanged := key // NOTE: Only needed (string header) for error logs.
+    if strings.HasPrefix(key, asy) {
+        this.async = true
+        key = key[len(asy):]
+    }
+
+    switch {
+    case strings.HasPrefix(key, dir):
+        this.kind = "DIR"
+        key = key[len(dir):]
+    case strings.HasPrefix(key, bra):
+        this.kind = "BRA"
+        key = key[len(bra):]
+    default:
+        return fmt.Errorf("unrecognised/missing <KIND>/<TARGET> in %s", unchanged)
+    }
+
+    this.target = key
+    this.commands = strings.Split(val, ",")
+    return nil
+}
+
+func (this *Entry) Start() {
+    switch {
+    case this.kind == "DIR" && isDirMatch(this.target):
+        break
+    case this.kind == "BRA" && isBraMatch(this.target):
+        break
+    default:
+        return
+    }
+
+    count := len(this.commands)
+    // NOTE: Useless WaitGroup for synchronous branch. Code is a little simpler
+    // with negligible performance hit.
+    var wg sync.WaitGroup
+    wg.Add(count)
+
+    for idx := 0; idx < count; idx++ {
+        cmd := this.commands[idx]
+
+        // NOTE: Similar to the WaitGroup, this check is unneeded every
+        // iteration but it's insignificant.
+        if this.async {
+            go runCommand(&wg, idx, cmd)
+            continue
+        }
+
+        runCommand(&wg, idx, cmd)
+    }
+
+    wg.Wait()
 }
 
 func main() {
-    logInfo("envcmd %s", version)
-
+    fmt.Printf("envcmd@%s\n", version)
     envs := os.Environ()
+
     for idx := 0; idx < len(envs); idx++ {
-        segments := strings.SplitN(envs[idx], "=", 2)
+        segments := strings.Split(envs[idx], "=")
 
-        key, val := segments[0], segments[1]
-        if !strings.HasPrefix(key, "EVC_") {
+        key, val, prefix := segments[0], segments[1], "EVC_"
+        if !strings.HasPrefix(key, prefix) {
             continue
+        } else {
+            key = key[len(prefix):] // Skip past the prefix.
         }
 
-        segments = strings.Split(key, "_")
-        length := len(segments)
-
-        if length != 3 && length != 4 {
-            logError("malformed key: %s", key)
-            continue
-        }
-
-        entry := Entry{
-            async:    length == 4,
-            kind:     Kind(segments[length-2]),
-            target:   segments[length-1],
-            commands: strings.Split(val, ","),
-        }
-
-        if err := entry.Validate(segments); err != nil {
-            logError("invalid key: %s", err)
+        var entry Entry
+        if err := entry.MutBuild(key, val); err != nil {
+            logError("parsing env: %v", err)
             continue
         }
 
