@@ -151,12 +151,12 @@ func (this *Entry) Start() {
 
 func main() {
     fmt.Printf("envcmd@%s\n", version)
-    envs := os.Environ()
 
+    envs, prefix := os.Environ(), "EVC_"
     for idx := 0; idx < len(envs); idx++ {
         segments := strings.Split(envs[idx], "=")
 
-        key, val, prefix := segments[0], segments[1], "EVC_"
+        key, val := segments[0], segments[1]
         if !strings.HasPrefix(key, prefix) {
             continue
         } else {
