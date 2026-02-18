@@ -92,9 +92,9 @@ type Entry struct {
 }
 
 func (this *Entry) MutBuild(key, val string) error {
-    const asy = "ASYNC_"
-    const dir = "DIR_"
-    const bra = "BRA_"
+    asy := "ASYNC_"
+    dir := "DIR_"
+    bra := "BRA_"
 
     unchanged := key // NOTE: Only needed (string header) for error logs.
     if strings.HasPrefix(key, asy) {
@@ -141,10 +141,9 @@ func (this *Entry) Start() {
         // iteration but it's insignificant.
         if this.async {
             go runCommand(&wg, idx, cmd)
-            continue
+        } else {
+            runCommand(&wg, idx, cmd)
         }
-
-        runCommand(&wg, idx, cmd)
     }
 
     wg.Wait()
