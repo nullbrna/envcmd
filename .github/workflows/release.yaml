@@ -22,23 +22,24 @@ jobs:
                   go-version-file: go.mod
                   cache: true
 
-            - name: Version
-              id: vars
-              run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
             - name: Build
               env:
                   CGO_ENABLED: 0
                   GOOS: darwin
                   GOARCH: arm64
               run: |
-                  VERSION=${{ steps.vars.outputs.VERSION }}
-                  ARCHIVE=envcmd_${VERSION}_darwin_arm64
+                  VERSION="${GITHUB_REF##*/}"
+                  ARCHIVE="envcmd_${VERSION}_darwin_arm64"
 
                   go build -ldflags="-s -w -X main.version=${VERSION}" -o envcmd
 
-                  mkdir -p dist && tar -czf dist/${ARCHIVE}.tar.gz envcmd
-                  echo "SHA256:" && shasum -a 256 dist/${ARCHIVE}.tar.gz | awk '{print $1}'
+                  mkdir -p dist && tar -czf "dist/${ARCHIVE}.tar.gz" envcmd
+                  echo "ARCHIVE=${ARCHIVE}.tar.gz" >> $GITHUB_ENV
+
+            - name: Generate Checksum
+              run: |
+                  FILE="dist/${ARCHIVE}"
+                  echo "[CHECKSUM]" && shasum -a 256 "$FILE"
 
             - name: Create Release
               uses: softprops/action-gh-release@v2

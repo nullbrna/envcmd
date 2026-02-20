@@ -6,139 +6,97 @@ import (
     "os"
     "os/exec"
     "path/filepath"
-    "strconv"
     "strings"
     "sync"
 )
 
 var version = "v0.0.0"
 
-// Bright Blue, Bright Magenta, Bright Cyan
-var colours = []string{"94m", "95m", "96m"}
+var (
+    colours   = []string{"94", "95", "96"} // Blue, Magenta, Cyan
+    directory string
+    branch    string
+)
 
-func logError(format string, args ...any) {
-    fmt.Fprintf(os.Stderr, "\x1b[31mE\x1b[0m "+format+"\n", args...)
-}
-
-func logMuted(prefix, format string, args ...any) {
-    fmt.Printf("\x1b[90m"+prefix+" "+format+"\x1b[0m\n", args...)
-}
-
-func logColour(idx int, format string, args ...any) {
-    colour, prefix := colours[idx%len(colours)], strconv.Itoa(idx)
-    fmt.Printf("\x1b["+colour+prefix+"\x1b[0m "+format+"\n", args...)
-}
-
-func isDirMatch(target string) bool {
-    dir, err := os.Getwd()
-    if err != nil {
-        logError("reading directory: %v", err)
-        return false
-    }
-
-    // NOTE: Case-insensitive comparison.
-    return strings.EqualFold(filepath.Base(dir), target)
-}
-
-func isBraMatch(target string) bool {
-    out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
-    if err != nil {
-        logError("reading branch: %v", err)
-        return false
-    }
-
-    str := string(out)
-    // NOTE: Case-insensitive comparison.
-    return strings.EqualFold(strings.TrimSpace(str), target)
+func errLog(format string, args ...any) {
+    fmt.Fprintf(os.Stderr, "\x1b[1;31mERROR\x1b[0m "+format+"\n", args...)
 }
 
 func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
     defer wg.Done()
-    logMuted("+", "[%d] %s", idx, cmd)
 
-    // Combine both STDOUT & STDERR streams into one. Some use STDERR for
-    // non-error logs e.g docker-compose.
-    piped := fmt.Sprintf("%s 2>&1", cmd)
-    child := exec.Command("sh", "-c", piped)
+    fmt.Printf("\x1b[90m+ %s\x1b[0m\n", cmd)
+    child := exec.Command("sh", "-c", cmd)
 
-    out, err := child.StdoutPipe()
+    stdout, err := child.StdoutPipe()
     if err != nil {
-        logError("[%d] reading stdout: %v", idx, err)
+        errLog("reading stdout: %v", err)
         return
     }
+
+    // Merge both streams, some applications use STDERR for non-error related
+    // logs e.g docker-compose and needed to avoid swallowing errors.
+    child.Stderr = child.Stdout
 
     if err := child.Start(); err != nil {
-        logError("[%d] unable to start: %v", idx, err)
+        errLog("unable to start: %v", err)
         return
     }
 
-    reader := bufio.NewScanner(out)
+    reader := bufio.NewScanner(stdout)
     for reader.Scan() {
-        logColour(idx, "%s", reader.Text())
+        output := reader.Text()
+        // Rotate per-command through ANSI colour codes. Particularly ideal for
+        // running concurrently, as streams are logging simultaneously.
+        colour := colours[idx%len(colours)]
+
+        fmt.Printf("\x1b[1;%sm%d\x1b[0m %s\n", colour, idx, output)
+    }
+
+    if err := reader.Err(); err != nil {
+        errLog("reading output: %v", err)
     }
 
     if err := child.Wait(); err != nil {
-        logError("[%d] awaiting completion: %v", idx, err)
+        errLog("awaiting completion: %v", err)
         return
     }
 
-    logMuted("-", "[%d] %s", idx, cmd)
+    fmt.Printf("\x1b[90m- %s\x1b[0m\n", cmd)
 }
+
+type Kind int
+
+const (
+    dir Kind = iota
+    bra
+)
 
 type Entry struct {
-    async        bool
-    kind, target string
-    commands     []string
+    async    bool
+    kind     Kind
+    target   string
+    commands []string
 }
 
-func (this *Entry) MutBuild(key, val string) error {
-    asy := "ASYNC_"
-    dir := "DIR_"
-    bra := "BRA_"
-
-    unchanged := key // NOTE: Only needed (string header) for error logs.
-    if strings.HasPrefix(key, asy) {
-        this.async = true
-        key = key[len(asy):]
-    }
-
-    switch {
-    case strings.HasPrefix(key, dir):
-        this.kind = "DIR"
-        key = key[len(dir):]
-    case strings.HasPrefix(key, bra):
-        this.kind = "BRA"
-        key = key[len(bra):]
-    default:
-        return fmt.Errorf("unrecognised/missing <KIND>/<TARGET> in %s", unchanged)
-    }
-
-    this.target = key
-    this.commands = strings.Split(val, ",")
-    return nil
+func (this *Entry) CanRun() bool {
+    // NOTE: Case-insensitive comparison.
+    return (this.kind == dir && strings.EqualFold(directory, this.target)) ||
+        (this.kind == bra && strings.EqualFold(branch, this.target))
 }
 
 func (this *Entry) Start() {
-    switch {
-    case this.kind == "DIR" && isDirMatch(this.target):
-        break
-    case this.kind == "BRA" && isBraMatch(this.target):
-        break
-    default:
-        return
-    }
-
-    count := len(this.commands)
-    // NOTE: Useless WaitGroup for synchronous branch. Code is a little simpler
-    // with negligible performance hit.
+    // NOTE: Useless for synchronous branch but code is a little simpler with a
+    // negligible performance hit.
     var wg sync.WaitGroup
-    wg.Add(count)
+    count := len(this.commands)
 
+    wg.Add(count)
     for idx := 0; idx < count; idx++ {
         cmd := this.commands[idx]
 
-        // NOTE: Similar to the WaitGroup, this check is unneeded every
-        // iteration but it's insignificant.
+        // NOTE: Similar to the above, this check is unneeded every iteration
+        // but it's an insignificant hit.
         if this.async {
             go runCommand(&wg, idx, cmd)
         } else {
@@ -149,26 +107,75 @@ func (this *Entry) Start() {
     wg.Wait()
 }
 
+func (this *Entry) Build(key, val string) error {
+    buffer := key
+    if strings.HasPrefix(buffer, "ASYNC_") {
+        this.async = true
+        buffer = buffer[6:]
+    }
+
+    switch {
+    case strings.HasPrefix(buffer, "DIR_"):
+        this.kind = dir
+    case strings.HasPrefix(buffer, "BRA_"):
+        this.kind = bra
+    default:
+        return fmt.Errorf("invalid kind for %s", key)
+    }
+
+    // Strip the matched prefix above, leaving the rest untouched. No need to
+    // validate the format of the following as it's completely user-defined.
+    buffer = buffer[4:]
+    if len(buffer) == 0 {
+        return fmt.Errorf("invalid target for %s", key)
+    }
+
+    // NOTE: Nothing is trimmed, so whitespace is preserved.
+    this.target, this.commands = buffer, strings.Split(val, ",")
+    return nil
+}
+
+func init() {
+    path, err := os.Getwd()
+    if err != nil {
+        errLog("reading directory: %v", err)
+    }
+
+    output, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+    if err != nil {
+        errLog("reading branch: %v", err)
+    }
+
+    // NOTE: If either of the above fail, default strings are assigned.
+    directory, branch = filepath.Base(path), strings.TrimSpace(string(output))
+}
+
 func main() {
     fmt.Printf("envcmd@%s\n", version)
 
-    envs, prefix := os.Environ(), "EVC_"
-    for idx := 0; idx < len(envs); idx++ {
-        segments := strings.Split(envs[idx], "=")
+    // Somehow unable to determine the working directory & branch name so
+    // there's no point going any further.
+    if directory == "" && branch == "" {
+        return
+    }
 
-        key, val := segments[0], segments[1]
-        if !strings.HasPrefix(key, prefix) {
+    vars := os.Environ()
+    for idx := 0; idx < len(vars); idx++ {
+        // Handle cases where commands can use an equals sign i.e. setting
+        // inline environment variables by only getting the first split.
+        pair := strings.SplitN(vars[idx], "=", 2)
+
+        key, val := pair[0], pair[1]
+        if !strings.HasPrefix(key, "EVC_") {
             continue
-        } else {
-            key = key[len(prefix):] // Skip past the prefix.
         }
 
         var entry Entry
-        if err := entry.MutBuild(key, val); err != nil {
-            logError("parsing env: %v", err)
+        if err := entry.Build(key[4:], val); err != nil {
+            errLog("parsing env: %v", err)
             continue
+        } else if entry.CanRun() {
+            entry.Start()
         }
-
-        entry.Start()
     }
 }
