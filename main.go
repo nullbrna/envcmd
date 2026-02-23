@@ -63,53 +63,63 @@ type EnvironmentEntry struct {
     commands []string
 }
 
-func (this *EnvironmentEntry) BuildNew(key, value string) error {
+func (this *EnvironmentEntry) CanRun() bool {
+    return this.kind.IsDirMatch(this.target) || this.kind.IsBraMatch(this.target)
+}
+
+func (this *EnvironmentEntry) Start() {
+    commandCount := len(this.commands)
+
+    if this.isAsync {
+        var wg sync.WaitGroup
+
+        wg.Add(commandCount)
+        for i := 0; i < commandCount; i++ {
+            command := this.commands[i]
+            go runCommand(&wg, i, command)
+        }
+
+        wg.Wait()
+        return
+    }
+
+    for i := 0; i < commandCount; i++ {
+        command := this.commands[i]
+        runCommand(nil, i, command)
+    }
+}
+
+func newEntry(key, value string) (EnvironmentEntry, error) {
+    var entry EnvironmentEntry
+
     buffer := key
     if strings.HasPrefix(buffer, "ASYNC_") {
-        this.isAsync = true
+        entry.isAsync = true
         buffer = buffer[6:]
     }
 
     switch {
     case strings.HasPrefix(buffer, "DIR_"):
-        this.kind = kindDir
+        entry.kind = kindDir
     case strings.HasPrefix(buffer, "BRA_"):
-        this.kind = kindBra
+        entry.kind = kindBra
     default:
-        return fmt.Errorf("invalid kind for %s", key)
+        return entry, fmt.Errorf("invalid kind for %s", key)
     }
 
     buffer = buffer[4:]
     if len(buffer) == 0 {
-        return fmt.Errorf("invalid target for %s", key)
+        return entry, fmt.Errorf("invalid target for %s", key)
     }
 
-    this.target, this.commands = buffer, strings.Split(value, ",")
-    return nil
+    entry.target, entry.commands = buffer, strings.Split(value, ",")
+    return entry, nil
 }
 
-func (this *EnvironmentEntry) CanRun() bool {
-    return this.kind.IsDirMatch(this.target) || this.kind.IsBraMatch(this.target)
-}
-
-func (this *EnvironmentEntry) StartCommands() {
-    var wg sync.WaitGroup
-    commandCount := len(this.commands)
-
-    wg.Add(commandCount)
-    for i := 0; i < commandCount; i++ {
-        if this.isAsync {
-            go this.run(&wg, i, this.commands[i])
-        } else {
-            this.run(&wg, i, this.commands[i])
-        }
+func runCommand(wg *sync.WaitGroup, index int, command string) {
+    if wg != nil {
+        defer wg.Done()
     }
-
-    wg.Wait()
-}
-
-func (this *EnvironmentEntry) run(wg *sync.WaitGroup, index int, command string) {
-    defer wg.Done()
 
     fmt.Printf("\x1b[90m+ %s\x1b[0m\n", command)
     child := exec.Command("sh", "-c", command)
@@ -146,29 +156,29 @@ func (this *EnvironmentEntry) run(wg *sync.WaitGroup, index int, command string)
 }
 
 func main() {
-    fmt.Printf("envcmd@%s\n", version)
-
     if directoryName == "" && branchName == "" {
         os.Exit(1)
     }
 
-    environmentVars := os.Environ()
-    for i := 0; i < len(environmentVars); i++ {
-        keyAndValue := strings.SplitN(environmentVars[i], "=", 2)
+    envVars := os.Environ()
+    for i := 0; i < len(envVars); i++ {
+        pair := strings.SplitN(envVars[i], "=", 2)
 
-        key, value := keyAndValue[0], keyAndValue[1]
-        if strings.HasPrefix(key, "EVC_") {
-            key = key[4:]
-        } else {
+        key, value := pair[0], pair[1]
+        if !strings.HasPrefix(key, "EVC_") {
             continue
         }
 
-        var entry EnvironmentEntry
-        if err := entry.BuildNew(key, value); err != nil {
+        entry, err := newEntry(key[4:], value)
+        if err != nil {
             logError("parsing %s: %v", key, err)
             continue
-        } else if entry.CanRun() {
-            entry.StartCommands()
+        }
+
+        if entry.CanRun() {
+            entry.Start()
         }
     }
+
+    fmt.Printf("\nenvcmd@%s\n", version)
 }
