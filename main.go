@@ -10,12 +10,16 @@ import (
     "sync"
 )
 
-var version = "v0.0.0"
+var version = "v0.0.0" // Program version passed at build-time.
 
 var (
-    commandColours []string
-    directoryName  string
-    branchName     string
+    // ANSI colour codes rotated through for each running command. Particularly
+    // useful for concurrent output.
+    colours []string
+    // Base name of the working directory.
+    directory string
+    // Current Git branch resolved via spawned process.
+    branch string
 )
 
 func logError(format string, args ...any) {
@@ -23,24 +27,28 @@ func logError(format string, args ...any) {
 }
 
 func init() {
-    // Bright Blue, Bright Magenta, Bright Cyan
-    commandColours = []string{"94", "95", "96"}
+    colours = []string{"94", "95", "96"} // Blue, Magenta, Cyan
 
-    absoluteDirPath, err := os.Getwd()
+    absolutePath, err := os.Getwd()
     if err != nil {
         logError("reading directory: %v", err)
+        os.Exit(1)
     }
 
-    directoryName = filepath.Base(absoluteDirPath)
+    directory = filepath.Base(absolutePath)
 
-    branchOutput, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+    out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
     if err != nil {
         logError("reading branch (may not be within a repository): %v", err)
+        os.Exit(1)
     }
 
-    branchName = strings.TrimSpace(string(branchOutput))
+    branch = strings.TrimSpace(string(out))
 }
 
+// Trigger set within the environment variable key.
+// - DIR: Match working directory.
+// - BRA: Match current branch.
 type KindOfMatch int
 
 const (
@@ -49,17 +57,21 @@ const (
 )
 
 func (this *KindOfMatch) IsDirMatch(target string) bool {
-    return *this == kindDir && strings.EqualFold(directoryName, target)
+    return *this == kindDir && strings.EqualFold(directory, target)
 }
 
 func (this *KindOfMatch) IsBraMatch(target string) bool {
-    return *this == kindBra && strings.EqualFold(branchName, target)
+    return *this == kindBra && strings.EqualFold(branch, target)
 }
 
 type EnvironmentEntry struct {
-    kind     KindOfMatch
-    target   string
-    isAsync  bool
+    // Typed trigger set within the key.
+    kind KindOfMatch
+    // Remaining tail of the key.
+    target string
+    // Optional flag set within the key.
+    isAsync bool
+    // Shell commands split by a delimiter in the value.
     commands []string
 }
 
@@ -71,15 +83,7 @@ func (this *EnvironmentEntry) Start() {
     commandCount := len(this.commands)
 
     if this.isAsync {
-        var wg sync.WaitGroup
-
-        wg.Add(commandCount)
-        for i := 0; i < commandCount; i++ {
-            command := this.commands[i]
-            go runCommand(&wg, i, command)
-        }
-
-        wg.Wait()
+        this.spawnAndWait(commandCount)
         return
     }
 
@@ -89,36 +93,21 @@ func (this *EnvironmentEntry) Start() {
     }
 }
 
-func newEntry(key, value string) (EnvironmentEntry, error) {
-    var entry EnvironmentEntry
+func (this *EnvironmentEntry) spawnAndWait(count int) {
+    var wg sync.WaitGroup
+    wg.Add(count)
 
-    buffer := key
-    if strings.HasPrefix(buffer, "ASYNC_") {
-        entry.isAsync = true
-        buffer = buffer[6:]
+    for i := 0; i < count; i++ {
+        command := this.commands[i]
+        go runCommand(&wg, i, command)
     }
 
-    switch {
-    case strings.HasPrefix(buffer, "DIR_"):
-        entry.kind = kindDir
-    case strings.HasPrefix(buffer, "BRA_"):
-        entry.kind = kindBra
-    default:
-        return entry, fmt.Errorf("invalid kind for %s", key)
-    }
-
-    buffer = buffer[4:]
-    if len(buffer) == 0 {
-        return entry, fmt.Errorf("invalid target for %s", key)
-    }
-
-    entry.target, entry.commands = buffer, strings.Split(value, ",")
-    return entry, nil
+    wg.Wait() // Block until all routines have finished.
 }
 
 func runCommand(wg *sync.WaitGroup, index int, command string) {
     if wg != nil {
-        defer wg.Done()
+        defer wg.Done() // Signal completion when running asynchronously.
     }
 
     fmt.Printf("\x1b[90m+ %s\x1b[0m\n", command)
@@ -130,8 +119,7 @@ func runCommand(wg *sync.WaitGroup, index int, command string) {
         return
     }
 
-    child.Stderr = child.Stdout
-
+    child.Stderr = child.Stdout // Merge STDERR with STDOUT to capture both.
     if err := child.Start(); err != nil {
         logError("unable to start %s: %v", command, err)
         return
@@ -139,8 +127,10 @@ func runCommand(wg *sync.WaitGroup, index int, command string) {
 
     reader := bufio.NewScanner(stdout)
     for reader.Scan() {
-        output, colour := reader.Text(), index%len(commandColours)
-        fmt.Printf("\x1b[1;%sm%d\x1b[0m %s\n", commandColours[colour], index, output)
+        // Use the index of the command declared in the environment variable to
+        // rotate through the ANSI colour codes.
+        colour := colours[index%len(colours)]
+        fmt.Printf("\x1b[1;%sm%d\x1b[0m %s\n", colour, index, reader.Text())
     }
 
     if err := reader.Err(); err != nil {
@@ -155,29 +145,50 @@ func runCommand(wg *sync.WaitGroup, index int, command string) {
     fmt.Printf("\x1b[90m- %s\x1b[0m\n", command)
 }
 
-func main() {
-    if directoryName == "" && branchName == "" {
-        os.Exit(1)
+func parseAndRun(env string) {
+    // Must match: EVC_[ASYNC_]<DIR|BRA>_<TARGET>
+    key, value, found := strings.Cut(env, "=")
+    if !found || !strings.HasPrefix(key, "EVC_") {
+        return
     }
 
-    envVars := os.Environ()
-    for i := 0; i < len(envVars); i++ {
-        pair := strings.SplitN(envVars[i], "=", 2)
+    var entry EnvironmentEntry
 
-        key, value := pair[0], pair[1]
-        if !strings.HasPrefix(key, "EVC_") {
-            continue
-        }
+    buffer := key[4:]
+    if strings.HasPrefix(buffer, "ASYNC_") {
+        entry.isAsync = true
+        buffer = buffer[6:]
+    }
 
-        entry, err := newEntry(key[4:], value)
-        if err != nil {
-            logError("parsing %s: %v", key, err)
-            continue
-        }
+    switch {
+    case strings.HasPrefix(buffer, "DIR_"):
+        entry.kind = kindDir
+    case strings.HasPrefix(buffer, "BRA_"):
+        entry.kind = kindBra
+    default:
+        logError("invalid kind for %s", key)
+        return
+    }
 
-        if entry.CanRun() {
-            entry.Start()
-        }
+    buffer = buffer[4:]
+    if len(buffer) == 0 {
+        logError("invalid target for %s", key)
+        return
+    }
+
+    // Remaining key segments need no validation.
+    // NOTE: Commands aren't trimmed so whitespace is preserved.
+    entry.target, entry.commands = buffer, strings.Split(value, ",")
+    if entry.CanRun() {
+        entry.Start()
+    }
+}
+
+func main() {
+    variables := os.Environ()
+    for i := 0; i < len(variables); i++ {
+        env := variables[i]
+        parseAndRun(env)
     }
 
     fmt.Printf("\nenvcmd@%s\n", version)
