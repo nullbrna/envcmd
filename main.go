@@ -3,6 +3,7 @@ package main
 import (
     "bufio"
     "fmt"
+    "io"
     "os"
     "os/exec"
     "path/filepath"
@@ -13,12 +14,11 @@ import (
 var version = "v0.0.0" // Program version passed at build-time.
 
 var (
-    // ANSI colour codes rotated through for each running command. Particularly
-    // useful for concurrent output.
+    // ANSI colour codes rotated through for each running command.
     colours []string
-    // Base name of the working directory.
+    // Name of the working directory.
     directory string
-    // Current Git branch resolved via spawned process.
+    // Current branch resolved via spawned process.
     branch string
 )
 
@@ -46,13 +46,12 @@ func init() {
     branch = strings.TrimSpace(string(out))
 }
 
-// Trigger set within the environment variable key.
-// - DIR: Match working directory.
-// - BRA: Match current branch.
 type KindOfMatch int
 
 const (
+    // Trigger on working directory match.
     kindDir KindOfMatch = iota
+    // Trigger on current branch match.
     kindBra
 )
 
@@ -65,13 +64,13 @@ func (this *KindOfMatch) IsBraMatch(target string) bool {
 }
 
 type EnvironmentEntry struct {
-    // Typed trigger set within the key.
+    // Trigger for where/when the command(s) run.
     kind KindOfMatch
-    // Remaining tail of the key.
+    // Remaining tail segments.
     target string
-    // Optional flag set within the key.
+    // Optional flag for running commands concurrently.
     isAsync bool
-    // Shell commands split by a delimiter in the value.
+    // Shell commands split by a delimiter.
     commands []string
 }
 
@@ -81,7 +80,6 @@ func (this *EnvironmentEntry) CanRun() bool {
 
 func (this *EnvironmentEntry) Start() {
     commandCount := len(this.commands)
-
     if this.isAsync {
         this.spawnAndWait(commandCount)
         return
@@ -102,12 +100,12 @@ func (this *EnvironmentEntry) spawnAndWait(count int) {
         go runCommand(&wg, i, command)
     }
 
-    wg.Wait() // Block until all routines have finished.
+    wg.Wait()
 }
 
 func runCommand(wg *sync.WaitGroup, index int, command string) {
     if wg != nil {
-        defer wg.Done() // Signal completion when running asynchronously.
+        defer wg.Done()
     }
 
     fmt.Printf("\x1b[90m+ %s\x1b[0m\n", command)
@@ -115,30 +113,35 @@ func runCommand(wg *sync.WaitGroup, index int, command string) {
 
     stdout, err := child.StdoutPipe()
     if err != nil {
-        logError("reading stdout: %v", err)
+        logError("connecting to '%s' output: %v", command, err)
         return
     }
 
-    child.Stderr = child.Stdout // Merge STDERR with STDOUT to capture both.
+    // NOTE: Merge streams, not only for error reporting but some info/debug
+    // logs are also within the STDERR stream e.g. docker-compose.
+    child.Stderr = child.Stdout
     if err := child.Start(); err != nil {
-        logError("unable to start %s: %v", command, err)
+        logError("unable to start '%s': %v", command, err)
         return
     }
 
-    reader := bufio.NewScanner(stdout)
-    for reader.Scan() {
-        // Use the index of the command declared in the environment variable to
-        // rotate through the ANSI colour codes.
-        colour := colours[index%len(colours)]
-        fmt.Printf("\x1b[1;%sm%d\x1b[0m %s\n", colour, index, reader.Text())
-    }
+    reader := bufio.NewReader(stdout)
+    for {
+        line, err := reader.ReadString('\n')
 
-    if err := reader.Err(); err != nil {
-        logError("reading output from %s: %v", command, err)
+        if err == io.EOF {
+            break
+        } else if err != nil {
+            logError("reading from '%s': %v", command, err)
+            continue
+        }
+
+        colour := colours[index%len(colours)]
+        fmt.Printf("\x1b[1;%sm%d\x1b[0m %s", colour, index, line)
     }
 
     if err := child.Wait(); err != nil {
-        logError("awaiting completion for %s: %v", command, err)
+        logError("awaiting completion for '%s': %v", command, err)
         return
     }
 
@@ -146,7 +149,6 @@ func runCommand(wg *sync.WaitGroup, index int, command string) {
 }
 
 func parseAndRun(env string) {
-    // Must match: EVC_[ASYNC_]<DIR|BRA>_<TARGET>
     key, value, found := strings.Cut(env, "=")
     if !found || !strings.HasPrefix(key, "EVC_") {
         return
@@ -166,19 +168,19 @@ func parseAndRun(env string) {
     case strings.HasPrefix(buffer, "BRA_"):
         entry.kind = kindBra
     default:
-        logError("invalid kind for %s", key)
+        logError("invalid kind for '%s'", key)
         return
     }
 
     buffer = buffer[4:]
     if len(buffer) == 0 {
-        logError("invalid target for %s", key)
+        logError("invalid target for '%s'", key)
         return
     }
 
-    // Remaining key segments need no validation.
     // NOTE: Commands aren't trimmed so whitespace is preserved.
     entry.target, entry.commands = buffer, strings.Split(value, ",")
+
     if entry.CanRun() {
         entry.Start()
     }
