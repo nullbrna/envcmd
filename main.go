@@ -80,22 +80,20 @@ func (this *EnvironmentEntry) CanRun() bool {
 
 func (this *EnvironmentEntry) Start() {
     commandCount := len(this.commands)
-    if this.isAsync {
-        this.spawnAndWait(commandCount)
+
+    if !this.isAsync {
+        for i := 0; i < commandCount; i++ {
+            command := this.commands[i]
+            runCommand(nil, i, command)
+        }
+
         return
     }
 
-    for i := 0; i < commandCount; i++ {
-        command := this.commands[i]
-        runCommand(nil, i, command)
-    }
-}
-
-func (this *EnvironmentEntry) spawnAndWait(count int) {
     var wg sync.WaitGroup
-    wg.Add(count)
+    wg.Add(commandCount)
 
-    for i := 0; i < count; i++ {
+    for i := 0; i < commandCount; i++ {
         command := this.commands[i]
         go runCommand(&wg, i, command)
     }
@@ -141,8 +139,8 @@ func runCommand(wg *sync.WaitGroup, index int, command string) {
     }
 
     if err := child.Wait(); err != nil {
-        logError("awaiting completion for '%s': %v", command, err)
-        return
+        logError("aborted from '%s': %v", command, err)
+        os.Exit(1)
     }
 
     fmt.Printf("\x1b[90m- %s\x1b[0m\n", command)
