@@ -15,57 +15,54 @@ var version = "v0.0.0" // Program version passed at build-time.
 
 var (
     // ANSI colour codes rotated through for each running command.
-    colours []string
+    COLOURS []string
     // Name of the working directory.
-    directory string
+    DIRECTORY string
     // Current branch resolved via spawned process.
-    branch string
+    BRANCH string
 )
 
-func logError(format string, args ...any) {
-    fmt.Fprintf(os.Stderr, "\x1b[1;31mERROR\x1b[0m "+format+"\n", args...)
+func logAndAbort(format string, args ...any) {
+    fmt.Fprintf(os.Stderr, "\x1b[1;31mE\x1b[0m "+format+"\n", args...)
+    os.Exit(1)
 }
 
 func init() {
-    colours = []string{"94", "95", "96"} // Blue, Magenta, Cyan
+    COLOURS = []string{"94", "95", "96"} // Blue, Magenta, Cyan
 
     absolutePath, err := os.Getwd()
     if err != nil {
-        logError("reading directory: %v", err)
-        os.Exit(1)
+        logAndAbort("reading directory: %v", err)
     }
 
-    directory = filepath.Base(absolutePath)
+    DIRECTORY = filepath.Base(absolutePath)
 
     out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
     if err != nil {
-        logError("reading branch (may not be within a repository): %v", err)
-        os.Exit(1)
+        logAndAbort("reading branch (may not be within a repository): %v", err)
     }
 
-    branch = strings.TrimSpace(string(out))
+    BRANCH = strings.TrimSpace(string(out))
 }
 
-type KindOfMatch int
+type MatchKind int
 
 const (
-    // Trigger on working directory match.
-    kindDir KindOfMatch = iota
-    // Trigger on current branch match.
-    kindBra
+    KindDir MatchKind = iota
+    KindBra
 )
 
-func (this *KindOfMatch) IsDirMatch(target string) bool {
-    return *this == kindDir && strings.EqualFold(directory, target)
+func (this *MatchKind) IsDirMatch(target string) bool {
+    return *this == KindDir && strings.EqualFold(DIRECTORY, target)
 }
 
-func (this *KindOfMatch) IsBraMatch(target string) bool {
-    return *this == kindBra && strings.EqualFold(branch, target)
+func (this *MatchKind) IsBraMatch(target string) bool {
+    return *this == KindBra && strings.EqualFold(BRANCH, target)
 }
 
 type EnvironmentEntry struct {
     // Trigger for where/when the command(s) run.
-    kind KindOfMatch
+    kind MatchKind
     // Remaining tail segments.
     target string
     // Optional flag for running commands concurrently.
@@ -79,106 +76,105 @@ func (this *EnvironmentEntry) CanRun() bool {
 }
 
 func (this *EnvironmentEntry) Start() {
-    commandCount := len(this.commands)
+    cmdCount := len(this.commands)
 
-    if !this.isAsync {
-        for i := 0; i < commandCount; i++ {
-            command := this.commands[i]
-            runCommand(nil, i, command)
+    if this.isAsync {
+        var wg sync.WaitGroup
+        wg.Add(cmdCount)
+
+        // Each command spawns a new routine. Immediately wait for all spawned
+        // processes to finish, allows for concurrent STDOUT streams.
+        for idx := 0; idx < cmdCount; idx++ {
+            go runCommand(&wg, idx, this.commands[idx])
         }
 
+        wg.Wait()
         return
     }
 
-    var wg sync.WaitGroup
-    wg.Add(commandCount)
-
-    for i := 0; i < commandCount; i++ {
-        command := this.commands[i]
-        go runCommand(&wg, i, command)
+    for idx := 0; idx < cmdCount; idx++ {
+        runCommand(nil, idx, this.commands[idx])
     }
-
-    wg.Wait()
 }
 
-func runCommand(wg *sync.WaitGroup, index int, command string) {
+func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
     if wg != nil {
         defer wg.Done()
     }
 
-    fmt.Printf("\x1b[90m+ %s\x1b[0m\n", command)
-    child := exec.Command("sh", "-c", command)
+    fmt.Printf("\x1b[90m+ %s\x1b[0m\n", cmd)
+    child := exec.Command("sh", "-c", cmd)
 
     stdout, err := child.StdoutPipe()
     if err != nil {
-        logError("connecting to '%s' output: %v", command, err)
-        return
+        logAndAbort("connecting to '%s' output: %v", cmd, err)
     }
 
-    // NOTE: Merge streams, not only for error reporting but some info/debug
-    // logs are also within the STDERR stream e.g. docker-compose.
+    // Merge streams, not only for error reporting but some info/debug logs are
+    // also within the STDERR stream e.g. docker-compose.
     child.Stderr = child.Stdout
     if err := child.Start(); err != nil {
-        logError("unable to start '%s': %v", command, err)
-        return
+        logAndAbort("unable to start '%s': %v", cmd, err)
     }
 
-    reader := bufio.NewReader(stdout)
+    colour, reader := COLOURS[idx%len(COLOURS)], bufio.NewReader(stdout)
     for {
         line, err := reader.ReadString('\n')
 
         if err == io.EOF {
             break
         } else if err != nil {
-            logError("reading from '%s': %v", command, err)
-            continue
+            logAndAbort("reading from '%s': %v", cmd, err)
         }
 
-        colour := colours[index%len(colours)]
-        fmt.Printf("\x1b[1;%sm%d\x1b[0m %s", colour, index, line)
+        fmt.Printf("\x1b[1;%sm%d\x1b[0m %s", colour, idx, line)
     }
 
+    // Resolve once the command completes, can error for a non-zero exit.
     if err := child.Wait(); err != nil {
-        logError("aborted from '%s': %v", command, err)
-        os.Exit(1)
+        logAndAbort("aborted from '%s': %v", cmd, err)
     }
 
-    fmt.Printf("\x1b[90m- %s\x1b[0m\n", command)
+    fmt.Printf("\x1b[90m- %s\x1b[0m\n", cmd)
 }
 
-func parseAndRun(env string) {
-    key, value, found := strings.Cut(env, "=")
+func parseAndRun(variable string) {
+    key, value, found := strings.Cut(variable, "=")
     if !found || !strings.HasPrefix(key, "EVC_") {
         return
     }
 
     var entry EnvironmentEntry
 
+    // 1. Skip past the prefix and check for optional concurrent flag.
     buffer := key[4:]
     if strings.HasPrefix(buffer, "ASYNC_") {
         entry.isAsync = true
         buffer = buffer[6:]
     }
 
+    // 2. Determine the trigger that's at the 1st or 2nd position.
     switch {
     case strings.HasPrefix(buffer, "DIR_"):
-        entry.kind = kindDir
+        entry.kind = KindDir
     case strings.HasPrefix(buffer, "BRA_"):
-        entry.kind = kindBra
+        entry.kind = KindBra
     default:
-        logError("invalid kind for '%s'", key)
-        return
+        logAndAbort("invalid kind for '%s'", key)
     }
 
+    // 3. Skip past the trigger and ensure there's tail segments following.
     buffer = buffer[4:]
     if len(buffer) == 0 {
-        logError("invalid target for '%s'", key)
-        return
+        logAndAbort("invalid target for '%s'", key)
     }
 
-    // NOTE: Commands aren't trimmed so whitespace is preserved.
-    entry.target, entry.commands = buffer, strings.Split(value, ",")
+    segments := strings.Split(value, ",")
+    for idx := 0; idx < len(segments); idx++ {
+        segments[idx] = strings.TrimSpace(segments[idx])
+    }
 
+    entry.target, entry.commands = buffer, segments
     if entry.CanRun() {
         entry.Start()
     }
@@ -186,9 +182,8 @@ func parseAndRun(env string) {
 
 func main() {
     variables := os.Environ()
-    for i := 0; i < len(variables); i++ {
-        env := variables[i]
-        parseAndRun(env)
+    for idx := 0; idx < len(variables); idx++ {
+        parseAndRun(variables[idx])
     }
 
     fmt.Printf("\nenvcmd@%s\n", version)
