@@ -11,15 +11,11 @@ import (
     "sync"
 )
 
-var version = "v0.0.0" // Program version passed at build-time.
-
 var (
-    // ANSI colour codes rotated through for each running command.
-    COLOURS []string
-    // Name of the working directory.
-    DIRECTORY string
-    // Current branch resolved via spawned process.
-    BRANCH string
+    version   = "v0.0.0" // Program version passed at build-time.
+    colours   []string   // ANSI colour codes rotated through for each running command.
+    directory string     // Name of the working directory.
+    branch    string     // Current branch resolved via spawned process.
 )
 
 func logAndAbort(format string, args ...any) {
@@ -28,47 +24,79 @@ func logAndAbort(format string, args ...any) {
 }
 
 func init() {
-    COLOURS = []string{"94", "95", "96"} // Blue, Magenta, Cyan
+    // Blue, Magenta, Cyan
+    colours = []string{"94", "95", "96"}
 
-    absolutePath, err := os.Getwd()
+    path, err := os.Getwd()
     if err != nil {
         logAndAbort("reading directory: %v", err)
     }
 
-    DIRECTORY = filepath.Base(absolutePath)
-
-    out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+    text, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
     if err != nil {
         logAndAbort("reading branch (may not be within a repository): %v", err)
     }
 
-    BRANCH = strings.TrimSpace(string(out))
+    directory = filepath.Base(path)
+    branch = strings.TrimSpace(string(text))
 }
 
 type MatchKind int
 
 const (
-    KindDir MatchKind = iota
-    KindBra
+    KindDir MatchKind = iota // Check for working directory name equality.
+    KindBra                  // Check for current branch name equality.
 )
 
 func (this *MatchKind) IsDirMatch(target string) bool {
-    return *this == KindDir && strings.EqualFold(DIRECTORY, target)
+    return *this == KindDir && strings.EqualFold(directory, target)
 }
 
 func (this *MatchKind) IsBraMatch(target string) bool {
-    return *this == KindBra && strings.EqualFold(BRANCH, target)
+    return *this == KindBra && strings.EqualFold(branch, target)
 }
 
 type EnvironmentEntry struct {
-    // Trigger for where/when the command(s) run.
-    kind MatchKind
-    // Remaining tail segments.
-    target string
-    // Optional flag for running commands concurrently.
-    isAsync bool
-    // Shell commands split by a delimiter.
-    commands []string
+    kind     MatchKind // Trigger for where/when the command(s) run.
+    target   string    // Remaining tail segments.
+    isAsync  bool      // Optional flag for running commands concurrently.
+    commands []string  // Shell commands split by a delimiter.
+}
+
+func (this *EnvironmentEntry) FromKeyValue(key, value string) {
+    // 1. Skip past the prefix and check for optional concurrent flag.
+    buffer := key[4:]
+    if strings.HasPrefix(buffer, "ASYNC_") {
+        this.isAsync = true
+        buffer = buffer[6:]
+    }
+
+    // 2. Determine the trigger that's at the 1st or 2nd position.
+    switch {
+    case strings.HasPrefix(buffer, "DIR_"):
+        this.kind = KindDir
+    case strings.HasPrefix(buffer, "BRA_"):
+        this.kind = KindBra
+    default:
+        logAndAbort("invalid kind for '%s'", key)
+    }
+
+    // 3. Skip past the trigger and ensure there's tail segments following.
+    buffer = buffer[4:]
+    if len(buffer) == 0 {
+        logAndAbort("invalid target for '%s'", key)
+    }
+
+    commands := strings.Split(value, ",")
+    for idx := 0; idx < len(commands); idx++ {
+        command := commands[idx]
+        // Trim any leading and/or trailing whitespace. Primarily to cover
+        // cosmetic spaces after each delimiter.
+        commands[idx] = strings.TrimSpace(command)
+    }
+
+    this.target = buffer
+    this.commands = commands
 }
 
 func (this *EnvironmentEntry) CanRun() bool {
@@ -76,24 +104,26 @@ func (this *EnvironmentEntry) CanRun() bool {
 }
 
 func (this *EnvironmentEntry) Start() {
-    cmdCount := len(this.commands)
+    count := len(this.commands)
 
     if this.isAsync {
         var wg sync.WaitGroup
-        wg.Add(cmdCount)
+        wg.Add(count)
 
         // Each command spawns a new routine. Immediately wait for all spawned
         // processes to finish, allows for concurrent STDOUT streams.
-        for idx := 0; idx < cmdCount; idx++ {
-            go runCommand(&wg, idx, this.commands[idx])
+        for idx := 0; idx < count; idx++ {
+            command := this.commands[idx]
+            go runCommand(&wg, idx, command)
         }
 
         wg.Wait()
         return
     }
 
-    for idx := 0; idx < cmdCount; idx++ {
-        runCommand(nil, idx, this.commands[idx])
+    for idx := 0; idx < count; idx++ {
+        command := this.commands[idx]
+        runCommand(nil, idx, command)
     }
 }
 
@@ -117,7 +147,9 @@ func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
         logAndAbort("unable to start '%s': %v", cmd, err)
     }
 
-    colour, reader := COLOURS[idx%len(COLOURS)], bufio.NewReader(stdout)
+    colour := colours[idx%len(colours)]
+    reader := bufio.NewReader(stdout)
+
     for {
         line, err := reader.ReadString('\n')
 
@@ -138,52 +170,25 @@ func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
     fmt.Printf("\x1b[90m- %s\x1b[0m\n", cmd)
 }
 
-func parseAndRun(variable string) {
-    key, value, found := strings.Cut(variable, "=")
-    if !found || !strings.HasPrefix(key, "EVC_") {
-        return
-    }
-
-    var entry EnvironmentEntry
-
-    // 1. Skip past the prefix and check for optional concurrent flag.
-    buffer := key[4:]
-    if strings.HasPrefix(buffer, "ASYNC_") {
-        entry.isAsync = true
-        buffer = buffer[6:]
-    }
-
-    // 2. Determine the trigger that's at the 1st or 2nd position.
-    switch {
-    case strings.HasPrefix(buffer, "DIR_"):
-        entry.kind = KindDir
-    case strings.HasPrefix(buffer, "BRA_"):
-        entry.kind = KindBra
-    default:
-        logAndAbort("invalid kind for '%s'", key)
-    }
-
-    // 3. Skip past the trigger and ensure there's tail segments following.
-    buffer = buffer[4:]
-    if len(buffer) == 0 {
-        logAndAbort("invalid target for '%s'", key)
-    }
-
-    segments := strings.Split(value, ",")
-    for idx := 0; idx < len(segments); idx++ {
-        segments[idx] = strings.TrimSpace(segments[idx])
-    }
-
-    entry.target, entry.commands = buffer, segments
-    if entry.CanRun() {
-        entry.Start()
-    }
-}
-
 func main() {
     variables := os.Environ()
+
     for idx := 0; idx < len(variables); idx++ {
-        parseAndRun(variables[idx])
+        variable := variables[idx]
+
+        // Take before and after the first occurrence of the assignment
+        // operator. Any assignments in the commands will be respected.
+        key, value, found := strings.Cut(variable, "=")
+        if !found || !strings.HasPrefix(key, "EVC_") {
+            continue
+        }
+
+        var entry EnvironmentEntry
+        entry.FromKeyValue(key, value)
+
+        if entry.CanRun() {
+            entry.Start()
+        }
     }
 
     fmt.Printf("\nenvcmd@%s\n", version)
