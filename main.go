@@ -12,10 +12,15 @@ import (
 )
 
 var (
-    version   = "v0.0.0" // Program version passed at build-time.
-    colours   []string   // ANSI colour codes rotated through for each running command.
-    directory string     // Name of the working directory.
-    branch    string     // Current branch resolved via spawned process.
+    // Program version passed at build-time.
+    version = "v0.0.0"
+
+    // ANSI colour codes rotated through for each running command.
+    colours []string
+    // Name of the working directory.
+    directory string
+    // Current branch resolved via spawned process.
+    branch string
 )
 
 func logAndAbort(format string, args ...any) {
@@ -37,6 +42,8 @@ func init() {
         logAndAbort("reading branch (may not be within a repository): %v", err)
     }
 
+    // Trim the leading segments of the working absolute path and remove
+    // surrounding whitespace of command output.
     directory = filepath.Base(path)
     branch = strings.TrimSpace(string(text))
 }
@@ -44,8 +51,10 @@ func init() {
 type MatchKind int
 
 const (
-    KindDir MatchKind = iota // Check for working directory name equality.
-    KindBra                  // Check for current branch name equality.
+    // Working directory.
+    KindDir MatchKind = iota
+    // Current branch.
+    KindBra
 )
 
 func (this *MatchKind) IsDirMatch(target string) bool {
@@ -57,10 +66,14 @@ func (this *MatchKind) IsBraMatch(target string) bool {
 }
 
 type EnvironmentEntry struct {
-    kind     MatchKind // Trigger for where/when the command(s) run.
-    target   string    // Remaining tail segments.
-    isAsync  bool      // Optional flag for running commands concurrently.
-    commands []string  // Shell commands split by a delimiter.
+    // Trigger for where/when the command(s) run.
+    kind MatchKind
+    // Remaining tail segments.
+    target string
+    // Optional flag for running commands concurrently.
+    isAsync bool
+    // Shell commands split by a delimiter.
+    commands []string
 }
 
 func (this *EnvironmentEntry) FromKeyValue(key, value string) {
@@ -110,8 +123,8 @@ func (this *EnvironmentEntry) Start() {
         var wg sync.WaitGroup
         wg.Add(count)
 
-        // Each command spawns a new routine. Immediately wait for all spawned
-        // processes to finish, allows for concurrent STDOUT streams.
+        // Each command spawns a new routine. Wait for all spawned processes to
+        // finish, allowing concurrent STDOUT streams.
         for idx := 0; idx < count; idx++ {
             command := this.commands[idx]
             go runCommand(&wg, idx, command)
