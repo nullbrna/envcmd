@@ -16,7 +16,7 @@ var (
     version = "v0.0.0"
 
     // ANSI colour codes rotated through for each running command.
-    colours []string
+    colours = []string{"94", "95", "96"} // Blue, Magenta, Cyan
     // Name of the working directory.
     directory string
     // Current branch resolved via spawned process.
@@ -29,9 +29,6 @@ func logAndAbort(format string, args ...any) {
 }
 
 func init() {
-    // Blue, Magenta, Cyan
-    colours = []string{"94", "95", "96"}
-
     path, err := os.Getwd()
     if err != nil {
         logAndAbort("reading directory: %v", err)
@@ -42,8 +39,6 @@ func init() {
         logAndAbort("reading branch (may not be within a repository): %v", err)
     }
 
-    // Trim the leading segments of the working absolute path and remove
-    // surrounding whitespace of command output.
     directory = filepath.Base(path)
     branch = strings.TrimSpace(string(text))
 }
@@ -103,8 +98,6 @@ func (this *EnvironmentEntry) FromKeyValue(key, value string) {
     commands := strings.Split(value, ",")
     for idx := 0; idx < len(commands); idx++ {
         command := commands[idx]
-        // Trim any leading and/or trailing whitespace. Primarily to cover
-        // cosmetic spaces after each delimiter.
         commands[idx] = strings.TrimSpace(command)
     }
 
@@ -123,8 +116,6 @@ func (this *EnvironmentEntry) Start() {
         var wg sync.WaitGroup
         wg.Add(count)
 
-        // Each command spawns a new routine. Wait for all spawned processes to
-        // finish, allowing concurrent STDOUT streams.
         for idx := 0; idx < count; idx++ {
             command := this.commands[idx]
             go runCommand(&wg, idx, command)
@@ -175,7 +166,6 @@ func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
         fmt.Printf("\x1b[1;%sm%d\x1b[0m %s", colour, idx, line)
     }
 
-    // Resolve once the command completes, can error for a non-zero exit.
     if err := child.Wait(); err != nil {
         logAndAbort("aborted from '%s': %v", cmd, err)
     }
@@ -189,8 +179,6 @@ func main() {
     for idx := 0; idx < len(variables); idx++ {
         variable := variables[idx]
 
-        // Take before and after the first occurrence of the assignment
-        // operator. Any assignments in the commands will be respected.
         key, value, found := strings.Cut(variable, "=")
         if !found || !strings.HasPrefix(key, "EVC_") {
             continue
