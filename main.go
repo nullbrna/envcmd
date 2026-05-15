@@ -16,7 +16,7 @@ var (
     version = "v0.0.0"
 
     // ANSI colour codes rotated through for each running command.
-    colours = []string{"94", "95", "96"} // Blue, Magenta, Cyan
+    colours = []string{"92", "94", "95", "96"} // Green, Blue, Magenta, Cyan
     // Name of the working directory.
     directory string
     // Current branch resolved via spawned process.
