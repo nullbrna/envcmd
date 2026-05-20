@@ -97,8 +97,7 @@ func (this *EnvironmentEntry) FromKeyValue(key, value string) {
 
     commands := strings.Split(value, ",")
     for idx := 0; idx < len(commands); idx++ {
-        command := commands[idx]
-        commands[idx] = strings.TrimSpace(command)
+        commands[idx] = strings.TrimSpace(commands[idx])
     }
 
     this.target = buffer
@@ -110,24 +109,20 @@ func (this *EnvironmentEntry) CanRun() bool {
 }
 
 func (this *EnvironmentEntry) Start() {
-    count := len(this.commands)
+    var wg sync.WaitGroup
 
-    if this.isAsync {
-        var wg sync.WaitGroup
-        wg.Add(count)
-
-        for idx := 0; idx < count; idx++ {
-            command := this.commands[idx]
-            go runCommand(&wg, idx, command)
+    for idx := 0; idx < len(this.commands); idx++ {
+        if this.isAsync {
+            wg.Add(1)
+            go runCommand(&wg, idx, this.commands[idx])
+            continue
         }
 
-        wg.Wait()
-        return
+        runCommand(nil, idx, this.commands[idx])
     }
 
-    for idx := 0; idx < count; idx++ {
-        command := this.commands[idx]
-        runCommand(nil, idx, command)
+    if this.isAsync {
+        wg.Wait()
     }
 }
 
@@ -177,9 +172,7 @@ func main() {
     variables := os.Environ()
 
     for idx := 0; idx < len(variables); idx++ {
-        variable := variables[idx]
-
-        key, value, found := strings.Cut(variable, "=")
+        key, value, found := strings.Cut(variables[idx], "=")
         if !found || !strings.HasPrefix(key, "EVC_") {
             continue
         }
