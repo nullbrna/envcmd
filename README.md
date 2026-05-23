@@ -23,3 +23,20 @@ EVC_[ASYNC_]<DIR|BRA>_<TARGET>
 - **ASYNC:** Optional, runs all the commands concurrently
 - **DIR / BRA:** Directory or branch name (respectively) to run commands within
 - **TARGET:** The "matcher" to compare the environment name against
+
+## Release
+
+1. Push the latest changes. Then push up a new tag:
+
+```sh
+# View the existing tags.
+git tag
+
+git tag v0.0.0
+git push origin v0.0.0
+```
+
+2. An action will run to build and create a hash. Copy said hash along with the
+   new version number & file name to update the [corresponding
+   tap](https://github.com/nullbrna/homebrew-tap/blob/main/Formula/envcmd.rb)
+   metadata.
