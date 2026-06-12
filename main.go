@@ -21,7 +21,7 @@ const (
 var (
     // Program version passed at build-time.
     version = "v0.0.0"
-    // ANSI colour codes. Green, Yellow, Blue, Magenta, Cyan
+    // ANSI colour codes: Green, Yellow, Blue, Magenta, and Cyan.
     colours = []string{"32", "33", "34", "35", "36"}
     // Current directory and branch to run the commands against.
     directory, branch string
@@ -43,7 +43,6 @@ func init() {
         logAndAbort(ErrCurrentDirectory, "invalid working directory path")
     }
 
-    // Run and capture the STDOUT contents. Error maps to STDERR.
     bytes, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
     if err != nil {
         logAndAbort(ErrWorkingBranch, err)
@@ -68,24 +67,24 @@ func (this *MatchKind) IsBraMatch(target string) bool {
     return *this == KindBra && strings.EqualFold(branch, target)
 }
 
-func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
+func runCommand(wg *sync.WaitGroup, idx int, command string) {
     if wg != nil {
         defer wg.Done()
     }
 
-    fmt.Printf("\x1b[90m+ %s\x1b[0m\n", cmd)
-    child := exec.Command("sh", "-c", cmd)
+    fmt.Printf("\x1b[90m+ %s\x1b[0m\n", command)
+    child := exec.Command("sh", "-c", command)
 
     stdout, err := child.StdoutPipe()
     if err != nil {
-        logAndAbort(ErrRunningCommand, cmd, err)
+        logAndAbort(ErrRunningCommand, command, err)
     }
 
     // Merge streams. Not only for error reporting but some info and debug logs
     // are also within the STDERR stream e.g. docker-compose.
     child.Stderr = child.Stdout
     if err := child.Start(); err != nil {
-        logAndAbort(ErrRunningCommand, cmd, err)
+        logAndAbort(ErrRunningCommand, command, err)
     }
 
     reader := bufio.NewReader(stdout)
@@ -97,17 +96,17 @@ func runCommand(wg *sync.WaitGroup, idx int, cmd string) {
         if err == io.EOF {
             break
         } else if err != nil {
-            logAndAbort(ErrRunningCommand, cmd, err)
+            logAndAbort(ErrRunningCommand, command, err)
         }
 
         fmt.Printf("\x1b[1;%sm%d\x1b[0m %s", colour, idx, line)
     }
 
     if err := child.Wait(); err != nil {
-        logAndAbort(ErrRunningCommand, cmd, err)
+        logAndAbort(ErrRunningCommand, command, err)
     }
 
-    fmt.Printf("\x1b[90m- %s\x1b[0m\n", cmd)
+    fmt.Printf("\x1b[90m- %s\x1b[0m\n", command)
 }
 
 type EnvironmentEntry struct {
@@ -122,14 +121,12 @@ type EnvironmentEntry struct {
 }
 
 func (this *EnvironmentEntry) FromKeyValue(key, value string) {
-    // 1. Skip past the prefix and check for optional concurrent flag.
     buffer := key[4:]
     if strings.HasPrefix(buffer, "ASYNC_") {
         this.isAsync = true
         buffer = buffer[6:]
     }
 
-    // 2. Parse the trigger that's at the 1st or 2nd position.
     switch {
     case strings.HasPrefix(buffer, "DIR_"):
         this.kind = KindDir
@@ -139,7 +136,6 @@ func (this *EnvironmentEntry) FromKeyValue(key, value string) {
         logAndAbort(ErrInvalidEntry, key)
     }
 
-    // 3. Skip past the trigger and ensure there's tail segments following.
     buffer = buffer[4:]
     if len(buffer) == 0 {
         logAndAbort(ErrInvalidEntry, key)
