@@ -6,8 +6,8 @@
         "mode": "debug",
         "program": ".",
         "env": {
-            "EVC_ASYNC_DIR_ENVCMD": "echo 'one',echo 'two'",
-            "EVC_BRA_MAIN": "echo 'foo',echo 'bar'",
+            "EVC_ASYNC_DIR_ENVCMD": "echo 'one', echo 'two'",
+            "EVC_BRA_MAIN": "echo 'foo', echo 'bar'",
         },
     },
 ]
