@@ -6,6 +6,12 @@ Basic program to alias common commands between environments (directories and
 branches) with asynchronous capabilities. Mainly used at work to avoid writing
 the same setup/teardown commands across services over-and-over.
 
+## Installation
+
+```sh
+brew install nullbrna/tap/envcmd
+```
+
 ## Usage
 
 1. Set environment variables prefixed with the following format:
