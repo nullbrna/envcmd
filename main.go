@@ -12,10 +12,10 @@ import (
 )
 
 const (
-    ErrCurrentDirectory = "failed to get current directory: %v"
-    ErrWorkingBranch    = "failed to get your branch (may not be in a repository): %v"
-    ErrInvalidEntry     = "bad format <%s>, expected EVC_[ASYNC_]<DIR|BRA>_<TARGET>"
-    ErrRunningCommand   = "failed to start/complete command <%s>: %v"
+    ErrCurrentDirectory = "Failed to get current directory: %v"
+    ErrWorkingBranch    = "Failed to get your branch (may not be in a repository): %v"
+    ErrInvalidEntry     = "Bad format <%s>, expected EVC_[ASYNC_]<DIR|BRA>_<TARGET>"
+    ErrRunningCommand   = "Failed to start/complete command <%s>: %v"
 )
 
 var (
@@ -40,7 +40,7 @@ func init() {
 
     directory = filepath.Base(working)
     if directory == "." || directory == string(filepath.Separator) {
-        logAndAbort(ErrCurrentDirectory, "invalid working directory path")
+        logAndAbort(ErrCurrentDirectory, "Invalid working directory path")
     }
 
     bytes, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
@@ -48,8 +48,7 @@ func init() {
         logAndAbort(ErrWorkingBranch, err)
     }
 
-    commandText := string(bytes)
-    branch = strings.TrimSpace(commandText)
+    branch = strings.TrimSpace(string(bytes))
 }
 
 type MatchKind int
