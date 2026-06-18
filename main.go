@@ -169,6 +169,11 @@ func (this *EnvironmentEntry) StartAsync() {
 }
 
 func (this *EnvironmentEntry) Start() {
+    if this.isAsync {
+        this.StartAsync()
+        return
+    }
+
     for idx := 0; idx < len(this.commands); idx++ {
         command := this.commands[idx]
         runCommand(nil, idx, command)
@@ -200,13 +205,7 @@ func main() {
         variable := envVariables[idx]
 
         entry, isValid := parseEnvVariable(variable)
-        if !isValid || !entry.CanRun() {
-            continue
-        }
-
-        if entry.isAsync {
-            entry.StartAsync()
-        } else {
+        if isValid && entry.CanRun() {
             entry.Start()
         }
     }
