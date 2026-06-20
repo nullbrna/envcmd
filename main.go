@@ -120,12 +120,15 @@ type EnvironmentEntry struct {
 }
 
 func (this *EnvironmentEntry) FromKeyValue(key, value string) {
+    // 1. Create a buffer to leave original key for logs. Set the optional
+    // asynchronous flag, moving buffer forward if needed.
     buffer := key[4:]
     if strings.HasPrefix(buffer, "ASYNC_") {
         this.isAsync = true
         buffer = buffer[6:]
     }
 
+    // 2. Determine the kind of target to run commands for.
     switch {
     case strings.HasPrefix(buffer, "DIR_"):
         this.kind = KindDir
@@ -135,11 +138,13 @@ func (this *EnvironmentEntry) FromKeyValue(key, value string) {
         logAndAbort(ErrInvalidEntry, key)
     }
 
+    // 3. Move buffer forward after kind. Must have a trailing target.
     buffer = buffer[4:]
     if len(buffer) == 0 {
         logAndAbort(ErrInvalidEntry, key)
     }
 
+    // 4. Extract each command by delimiter and trim any surrounding space.
     parts := strings.Split(value, ",")
     for idx := 0; idx < len(parts); idx++ {
         command := parts[idx]
