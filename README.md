@@ -20,9 +20,9 @@ brew install nullbrna/tap/envcmd
 EVC_[ASYNC_]<DIR|BRA>_<TARGET>
 ```
 
-- **ASYNC:** Optional, runs all the commands concurrently
-- **DIR / BRA:** Directory or branch name (respectively) to run commands within
-- **TARGET:** The "matcher" to compare the environment name against
+- **ASYNC:** Runs all the commands concurrently (optional)
+- **DIR / BRA:** Kind of environment to check for a match
+- **TARGET:** The directory or branch name to, if matching, run the commands within
 
 2. No subcommands available. Just run directly:
 

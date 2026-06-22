@@ -144,7 +144,7 @@ func (this *EnvironmentEntry) FromKeyValue(key, value string) {
         logAndAbort(ErrInvalidEntry, key)
     }
 
-    // 4. Extract each command by delimiter and trim any surrounding space.
+    // 4. Extract each command by delimiter. Trim any padding between commands.
     parts := strings.Split(value, ",")
     for idx := 0; idx < len(parts); idx++ {
         command := parts[idx]
