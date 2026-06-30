@@ -38,6 +38,7 @@ envcmd
 # View the existing tags.
 git tag
 
+# Create and push to remote.
 git tag v0.0.0
 git push origin v0.0.0
 ```

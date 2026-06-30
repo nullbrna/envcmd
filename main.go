@@ -19,11 +19,11 @@ const (
 )
 
 var (
-    // Program version passed at build-time.
+    // Program version passed during build.
     version = "v0.0.0"
     // ANSI colour codes: Green, Yellow, Blue, Magenta, and Cyan.
     colours = []string{"32", "33", "34", "35", "36"}
-    // Current directory and branch to run the commands against.
+    // Values, when matching the set target, to run the commands within.
     directory, branch string
 )
 
@@ -79,8 +79,8 @@ func runCommand(wg *sync.WaitGroup, idx int, command string) {
         logAndAbort(ErrRunningCommand, command, err)
     }
 
-    // Merge streams. Not only for error reporting but some info and debug logs
-    // are also within the STDERR stream e.g. docker-compose.
+    // Merge streams. Not only for error reporting but some info/debug logs are
+    // also within the STDERR stream e.g. docker-compose.
     child.Stderr = child.Stdout
     if err := child.Start(); err != nil {
         logAndAbort(ErrRunningCommand, command, err)
@@ -194,7 +194,7 @@ func parseEnvVariable(variable string) (EnvironmentEntry, bool) {
 
     key, value, found := strings.Cut(variable, "=")
     // NOTE: Standard library always returns at least one equal sign in the
-    // environment variable list so the check is redundant.
+    // environment variable list so the length check is redundant.
     if !found || len(value) == 0 {
         return entry, false
     }
