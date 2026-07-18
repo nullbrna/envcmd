@@ -2,9 +2,9 @@ Environment-specific and configurable commands.
 
 ## Description
 
-Basic program to alias common commands between environments (directories and
-branches) with asynchronous capabilities. Mainly used at work to avoid writing
-the same setup/teardown commands across services over-and-over.
+Basic utility for aliasing commands across environments (directories and
+branches), with optional asynchronous execution. Used at work to avoid rewriting
+the same setup and teardown commands across multiple services.
 
 ## Installation
 
@@ -14,17 +14,19 @@ brew install nullbrna/tap/envcmd
 
 ## Usage
 
-1. Set environment variables prefixed with the following format:
+1. Set environment variables in the following format:
 
 ```
-EVC_[ASYNC_]<DIR|BRA>_<TARGET>
+EVC_[ASYNC_]<DIR|BRA>_<TARGET>="echo 'foo' ||| echo 'bar'"
 ```
 
-- **ASYNC:** Optional, runs all the commands concurrently
-- **DIR / BRA:** Directory or branch name (respectively) to run commands within
-- **TARGET:** The "matcher" to compare the environment name against
+| Part                   | Description                                          |
+|------------------------|------------------------------------------------------|
+| **ASYNC** (optional)   | Runs all the commands concurrently.                  |
+| **DIR / BRA**          | Environment type to match against.                   |
+| **TARGET**             | Directory or branch name to run the commands within. |
 
-2. No subcommands available. Just run directly:
+2. Run the command:
 
 ```sh
 envcmd
@@ -32,17 +34,19 @@ envcmd
 
 ## Release
 
-1. Push the latest changes, then push up a new tag:
+1. Push the latest changes, then create and push a new tag:
 
 ```sh
 # View the existing tags.
 git tag
 
+# Create and push to remote.
 git tag v0.0.0
 git push origin v0.0.0
 ```
 
-2. An action will run to build and create a hash. Copy said hash along with the
-   new version number and file name to update the [corresponding
+2. A GitHub Action will build the archive and generate its SHA-256 checksum.
+   Copy the checksum, along with the new version number and archive name, to
+   update the [corresponding
    tap](https://github.com/nullbrna/homebrew-tap/blob/main/Formula/envcmd.rb)
    metadata.

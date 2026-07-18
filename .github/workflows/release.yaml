@@ -3,37 +3,37 @@ name: Release
 on:
     push:
         tags:
+            # Run when a tag (e.g. "vX.X.X") is pushed.
             - "v*"
 
 permissions:
+    # Required to create/write the release archive.
     contents: write
 
 jobs:
     release:
-        runs-on: ubuntu-latest
+        runs-on: macos-latest
 
         steps:
             - name: Checkout
               uses: actions/checkout@v4
 
-            - name: Setup Go
-              uses: actions/setup-go@v5
-              with:
-                  go-version-file: go.mod
-                  cache: true
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
 
             - name: Build
-              env:
-                  CGO_ENABLED: 0
-                  GOOS: darwin
-                  GOARCH: arm64
               run: |
+                  # Strip leading (e.g. "refs/tags/vX.X.X") path segments.
                   VERSION="${GITHUB_REF##*/}"
                   ARCHIVE="envcmd_${VERSION}_darwin_arm64"
 
-                  go build -ldflags="-s -w -X main.version=${VERSION}" -o envcmd
+                  mkdir -p dist && cargo build --release --target aarch64-apple-darwin
 
-                  mkdir -p dist && tar -czf "dist/${ARCHIVE}.tar.gz" envcmd
+                  # -c: Create an archive.
+                  # -z: Use GZIP compression.
+                  # -f: Output archive name.
+                  # -C: Change into source directory.
+                  tar -czf "dist/${ARCHIVE}.tar.gz" -C target/aarch64-apple-darwin/release envcmd
                   echo "ARCHIVE=${ARCHIVE}.tar.gz" >> $GITHUB_ENV
 
             - name: Generate Checksum

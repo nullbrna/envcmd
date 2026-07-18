@@ -1,0 +1,5 @@
+format_strings = true
+imports_granularity = "Item"
+enum_discrim_align_threshold = 50
+struct_field_align_threshold = 50
+group_imports = "StdExternalCrate"
