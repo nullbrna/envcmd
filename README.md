@@ -41,8 +41,8 @@ envcmd
 git tag
 
 # Create and push to remote.
-git tag v0.0.0
-git push origin v0.0.0
+git tag vX.X.X
+git push origin vX.X.X
 ```
 
 2. A GitHub Action will build the archive and generate its SHA-256 checksum.
