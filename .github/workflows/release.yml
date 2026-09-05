@@ -1,0 +1,52 @@
+name: Release
+
+on:
+    push:
+        tags:
+            # Run when a tag (e.g. vX.X.X) is pushed.
+            - "v*"
+
+permissions:
+    # Required to create/write the release build.
+    contents: write
+
+jobs:
+    release:
+        runs-on: macos-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Odin
+              uses: laytan/setup-odin@v2
+
+            - name: Build
+              run: |
+                  # Strip leading (e.g. refs/tags/vX.X.X) path segments.
+                  TAG="${GITHUB_REF_NAME}"
+                  ARCHIVE="envcmd_${TAG}_darwin_arm64"
+
+                  mkdir -p dist
+                  odin build . \
+                      -target:darwin_arm64 \
+                      -o:speed \
+                      -define:VERSION=\"${TAG}\" \
+                      -out:envcmd
+
+                  # -c: Create an archive.
+                  # -z: Use GZIP compression.
+                  # -f: Output archive name.
+                  tar -czf "dist/${ARCHIVE}.tar.gz" envcmd
+                  echo "ARCHIVE=${ARCHIVE}.tar.gz" >> "$GITHUB_ENV"
+
+            - name: Generate Checksum
+              run: |
+                  FILE="dist/${ARCHIVE}"
+                  echo "[CHECKSUM]" && shasum -a 256 "$FILE"
+
+            - name: Create Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: |
+                      dist/*.tar.gz
