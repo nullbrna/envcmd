@@ -9,7 +9,7 @@ import "core:strings"
 
 VERSION :: #config(VERSION, "v0.0.0")
 
-USER_DIR, USER_BRANCH: string
+CTX: Context
 
 abort :: proc(msg: string, args: ..any) -> ! {
 	fmt.eprint("[\x1b[31mERR\x1b[0m] ")
@@ -24,168 +24,197 @@ warn :: proc(msg: string, args: ..any) {
 	fmt.print("\n")
 }
 
+Context :: struct {
+	usrdir, usrbranch: string,
+	tarsep, cmdsep:    string,
+}
+
 load_context :: proc() {
-	working_dir, wd_err := os.getwd(context.allocator)
-	if wd_err != nil do abort("Failed to read working directory: %v", wd_err)
-	else {
-		USER_DIR = strings.clone(filepath.base(working_dir), context.allocator)
-		delete(working_dir)
-	}
+	abspath, wderr := os.getwd(context.allocator)
+	if wderr != nil do abort("Failed to read working directory: %v", wderr)
 
-	proc_opts: os.Process_Desc
-	proc_opts.command = {"git", "branch", "--show-current"}
+	CTX.usrdir = strings.clone(filepath.base(abspath), context.allocator)
+	delete(abspath)
 
-	proc_state, stdout, stderr, proc_err := os.process_exec(proc_opts, context.allocator)
+	procopts: os.Process_Desc
+	procopts.command = {"git", "branch", "--show-current"}
+
+	procstate, stdout, stderr, procerr := os.process_exec(procopts, context.allocator)
 	defer delete(stdout)
 	defer delete(stderr)
 
-	if proc_err != nil || len(stderr) > 0 || !proc_state.success {
+	// Provide a fallback for when the user is NOT within a repository. Avoids a
+	// potential early termination of directory-context commands.
+	if procerr != nil || len(stderr) > 0 || !procstate.success {
 		warn("No Git branch found")
-		USER_BRANCH = strings.clone("", context.allocator)
-		return
+		CTX.usrbranch = strings.clone("", context.allocator)
+	} else {
+		fmtout := strings.trim_space(string(stdout))
+		CTX.usrbranch = strings.clone(fmtout, context.allocator)
 	}
 
-	USER_BRANCH = strings.clone(strings.trim_space(string(stdout)), context.allocator)
+	CTX.tarsep = os.get_env("EVC_TAR_SEP", context.allocator)
+	if len(CTX.tarsep) == 0 {
+		delete(CTX.tarsep)
+		CTX.tarsep = strings.clone("_", context.allocator)
+	}
+
+	CTX.cmdsep = os.get_env("EVC_CMD_SEP", context.allocator)
+	if len(CTX.cmdsep) == 0 {
+		delete(CTX.cmdsep)
+		CTX.cmdsep = strings.clone("|||", context.allocator)
+	}
+}
+
+free_context :: proc(ctx: ^Context) {
+	delete(ctx.usrdir)
+	delete(ctx.usrbranch)
+	delete(ctx.tarsep)
+	delete(ctx.cmdsep)
+
+	ctx^ = {}
 }
 
 within_context :: proc(kind, target: string) -> bool {
-	hyphenated, did_alloc := strings.replace_all(target, "_", "-", context.allocator)
-	defer if did_alloc do delete(hyphenated)
+	fromcfg, cfgalloc := strings.replace_all(target, "_", CTX.tarsep, context.temp_allocator)
+	defer if cfgalloc do delete(fromcfg)
 
-	variants := [2]string{target, hyphenated}
+	hyphenated, hyphalloc := strings.replace_all(target, "_", "-", context.temp_allocator)
+	defer if hyphalloc do delete(hyphenated)
+
+	variants := [2]string{fromcfg, hyphenated}
 	for var in variants {
-		if kind == "DIR" && strings.equal_fold(var, USER_DIR) do return true
-		if kind == "BRA" && strings.equal_fold(var, USER_BRANCH) do return true
+		if kind == "DIR" && strings.equal_fold(var, CTX.usrdir) do return true
+		if kind == "BRA" && strings.equal_fold(var, CTX.usrbranch) do return true
 	}
 
 	return false
 }
 
-run_command :: proc(idx: int, command: string) {
-	fmt.printfln("\x1b[90m→\x1b[22m %s\x1b[0m", command)
+run_command :: proc(cmdidx: int, cmd: string) {
+	fmt.printfln("\x1b[90m→\x1b[22m %s\x1b[0m", cmd)
 
-	writer, reader, pipe_err := os.pipe()
-	if pipe_err != nil do abort("Failed to get child process pipe: %v", pipe_err)
+	reader, writer, syserr := os.pipe()
+	if syserr != nil do abort("Failed to get child process pipe: %v", syserr)
 
-	proc_opts: os.Process_Desc
-	proc_opts.command = {"sh", "-c", command}
-	proc_opts.stdout = reader
-	proc_opts.stderr = reader
+	procopts: os.Process_Desc
+	procopts.command = {"sh", "-c", cmd}
+	procopts.stdout = writer
+	procopts.stderr = writer
 
-	process, proc_err := os.process_start(proc_opts)
-	if proc_err != nil {
-		os.close(writer)
+	process, procerr := os.process_start(procopts)
+	if procerr != nil {
 		os.close(reader)
-		abort("(%s) Failed to start: %v", command, proc_err)
+		os.close(writer)
+		abort("(%s) Failed to start: %v", cmd, procerr)
 	}
 
 	// Documentation from [os.pipe] - "When a parent passes one of the ends of
 	// the pipe to the child process, that end of the pipe needs to be closed by
 	// the parent, before any data is attempted to be read."
-	os.close(reader)
+	os.close(writer)
 
 	// Green, Yellow, Blue, Magenta, and Cyan ANSI codes.
 	@(static) colours := [5]u8{32, 33, 34, 35, 36}
 
 	buffer: bufio.Reader
-	bufio.reader_init(&buffer, os.to_stream(writer), 4096, context.temp_allocator)
+	bufio.reader_init(&buffer, os.to_stream(reader), 4096, context.temp_allocator)
 
 	for {
-		line, read_err := bufio.reader_read_string(&buffer, '\n', context.temp_allocator)
-		if len(line) > 0 do fmt.printf("[\x1b[%dm%d\x1b[0m] %s", colours[idx % len(colours)], idx, line)
+		line, readerr := bufio.reader_read_string(&buffer, '\n', context.temp_allocator)
+		if len(line) > 0 {
+			cmdcol := colours[cmdidx % len(colours)]
+			fmt.printf("[\x1b[%dm%d\x1b[0m] %s", cmdcol, cmdidx, line)
+		}
 
-		if read_err == .EOF do break
-		else if read_err != nil {
-			os.close(writer)
-			abort("(%s) Failed to read output: %v", command, read_err)
+		if readerr == .EOF do break
+		if readerr != nil {
+			os.close(reader)
+			abort("(%s) Failed to read output: %v", cmd, readerr)
 		}
 	}
 
 	bufio.reader_destroy(&buffer)
-	os.close(writer)
+	os.close(reader)
 
-	proc_state, wait_err := os.process_wait(process)
-	if wait_err != nil do abort("(%s) Failed to complete: %v", command, wait_err)
-	else if !proc_state.success do abort("(%s) Non-zero exit code returned", command)
+	procstate, waiterr := os.process_wait(process)
+	if waiterr != nil do abort("(%s) Failed to complete: %v", cmd, waiterr)
+	if !procstate.success do abort("(%s) Non-zero exit code returned", cmd)
 
-	fmt.printfln("\x1b[90m←\x1b[22m %s\x1b[0m", command)
+	fmt.printfln("\x1b[90m←\x1b[22m %s\x1b[0m", cmd)
 }
 
-parse_and_start :: proc(entry: string) {
-	if !strings.has_prefix(entry, "EVC_") do return
-	entry := entry[4:]
+parse_and_start :: proc(env: string) {
+	if !strings.has_prefix(env, "EVC_") do return
 
-	key, assignment, value := strings.partition(entry, "=")
-	if assignment != "=" do return
-
+	key, assignment, value := strings.partition(env[4:], "=")
 	kind, separator, target := strings.partition(key, "_")
-	if separator != "_" do return
 
-	if (kind != "DIR" && kind != "BRA") || len(target) == 0 {
-		warn("(%s) Unexpected format", key)
+	if separator != "_" || assignment != "=" {
+		warn("(%s) Unexpected key format", env)
 		return
-	} else if !within_context(kind, target) do return
-
-	idx := 0
-	for command in strings.split_iterator(&value, "|||") {
-		command := strings.trim_space(command)
-		if len(command) == 0 do continue
-
-		run_command(idx, command)
-		idx += 1
 	}
 
-	// NOTE: Responsible for the [run_command] allocations also.
+	if !within_context(kind, target) do return
+
+	cmdidx := 0
+	for cmd in strings.split_iterator(&value, CTX.cmdsep) {
+		fmtcmd := strings.trim_space(cmd)
+		if len(fmtcmd) == 0 do continue
+
+		run_command(cmdidx, fmtcmd)
+		cmdidx += 1
+	}
+
 	free_all(context.temp_allocator)
 }
 
 main :: proc() {
 	when ODIN_DEBUG {
 		dbg_report_allocs :: proc(name: string, tracker: ^mem.Tracking_Allocator) {
-			dangling := len(tracker.allocation_map)
-			if dangling == 0 do return
+			allocsleft := len(tracker.allocation_map)
+			if allocsleft == 0 do return
 
 			count := 1
-			for alloc_ptr in tracker.allocation_map {
-				alloc := tracker.allocation_map[alloc_ptr]
+			for allocptr in tracker.allocation_map {
+				alloc := tracker.allocation_map[allocptr]
 
-				fmt.eprintf("[\x1b[31m%s\x1b[0m] (%d/%d) ", name, count, dangling)
+				fmt.eprintf("[\x1b[31m%s\x1b[0m] (%d/%d) ", name, count, allocsleft)
 				fmt.eprintf("\x1b[33m%d\x1b[0m byte(s) - %v\n", alloc.size, alloc.location)
 				count += 1
 			}
 		}
 
-		general_alloc: mem.Tracking_Allocator
-		mem.tracking_allocator_init(&general_alloc, context.allocator)
-		temp_alloc: mem.Tracking_Allocator
-		mem.tracking_allocator_init(&temp_alloc, context.temp_allocator)
+		genalloc: mem.Tracking_Allocator
+		mem.tracking_allocator_init(&genalloc, context.allocator)
+		tmpalloc: mem.Tracking_Allocator
+		mem.tracking_allocator_init(&tmpalloc, context.temp_allocator)
 
 		// NOTE: Compile time blocks don't have a "real" scope. Changes to the
 		// context outlive the block, in this case the program lifetime.
-		context.allocator = mem.tracking_allocator(&general_alloc)
-		context.temp_allocator = mem.tracking_allocator(&temp_alloc)
+		context.allocator = mem.tracking_allocator(&genalloc)
+		context.temp_allocator = mem.tracking_allocator(&tmpalloc)
 
 		defer {
-			dbg_report_allocs("HEAP", &general_alloc)
-			mem.tracking_allocator_destroy(&general_alloc)
+			dbg_report_allocs("HEAP", &genalloc)
+			mem.tracking_allocator_destroy(&genalloc)
 
-			dbg_report_allocs("TEMP", &temp_alloc)
-			mem.tracking_allocator_destroy(&temp_alloc)
+			dbg_report_allocs("TEMP", &tmpalloc)
+			mem.tracking_allocator_destroy(&tmpalloc)
 		}
 	}
 
 	load_context()
-	defer delete(USER_DIR)
-	defer delete(USER_BRANCH)
+	defer free_context(&CTX)
 
-	env_vars, env_err := os.environ(context.allocator)
+	vars, enverr := os.environ(context.allocator)
 	defer {
-		for env in env_vars do delete(env)
-		delete(env_vars)
+		for env in vars do delete(env)
+		delete(vars)
 	}
 
-	if env_err != nil do abort("Failed to read environment: %v", env_err)
-	else do for entry in env_vars do parse_and_start(entry)
+	if enverr != nil do abort("Failed to read environment: %v", enverr)
+	for env in vars do parse_and_start(env)
 
 	fmt.printfln("\nenvcmd@%s", VERSION)
 }

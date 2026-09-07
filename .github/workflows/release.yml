@@ -31,7 +31,7 @@ jobs:
                   odin build . \
                       -target:darwin_arm64 \
                       -o:speed \
-                      -define:VERSION=\"${TAG}\" \
+                      -define:VERSION='"${TAG}"' \
                       -out:envcmd
 
                   # -c: Create an archive.

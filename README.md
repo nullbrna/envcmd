@@ -30,6 +30,14 @@ EVC_<DIR|BRA>_<TARGET>="echo 'foo' ||| echo 'bar'"
 > NOTE: `TARGET` is first matched as-is. If no match is found, underscores (_)
 > in the target are replaced with hyphens (-) and matched again.
 
+```sh
+# Replace all underscores in a <TARGET> when matching against the environment.
+# NOTE: Always checked against first before the fallback hyphen(s).
+EVC_TAR_SEP="_"
+# Replace the separators between the commands when parsing.
+EVC_CMD_SEP="|||"
+```
+
 2. Run the command:
 
 ```sh
