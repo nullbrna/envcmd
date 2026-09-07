@@ -23,7 +23,6 @@ jobs:
 
             - name: Build
               run: |
-                  # Strip leading (e.g. refs/tags/vX.X.X) path segments.
                   TAG="${GITHUB_REF_NAME}"
                   ARCHIVE="envcmd_${TAG}_darwin_arm64"
 
@@ -31,7 +30,7 @@ jobs:
                   odin build . \
                       -target:darwin_arm64 \
                       -o:speed \
-                      -define:VERSION='"${TAG}"' \
+                      -define:VERSION="${TAG}" \
                       -out:envcmd
 
                   # -c: Create an archive.
