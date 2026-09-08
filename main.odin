@@ -75,22 +75,6 @@ free_context :: proc(ctx: ^Context) {
 	ctx^ = {}
 }
 
-within_context :: proc(kind, target: string) -> bool {
-	fromcfg, cfgalloc := strings.replace_all(target, "_", CTX.tarsep, context.temp_allocator)
-	defer if cfgalloc do delete(fromcfg)
-
-	hyphenated, hyphalloc := strings.replace_all(target, "_", "-", context.temp_allocator)
-	defer if hyphalloc do delete(hyphenated)
-
-	variants := [2]string{fromcfg, hyphenated}
-	for var in variants {
-		if kind == "DIR" && strings.equal_fold(var, CTX.usrdir) do return true
-		if kind == "BRA" && strings.equal_fold(var, CTX.usrbranch) do return true
-	}
-
-	return false
-}
-
 run_command :: proc(cmdidx: int, cmd: string) {
 	fmt.printfln("\x1b[90m→\x1b[22m %s\x1b[0m", cmd)
 
@@ -150,15 +134,31 @@ parse_and_start :: proc(env: string) {
 	key, assignment, value := strings.partition(env[4:], "=")
 	kind, separator, target := strings.partition(key, "_")
 
-	if separator != "_" || assignment != "=" {
+	switch {
+	case kind == "TAR" || kind == "CMD":
+		return
+	case kind != "DIR" && kind != "BRA":
+		warn("(%s) Unexpected context kind", env)
+		return
+	case len(target) == 0:
+		warn("(%s) Missing context target", env)
+		return
+	case separator != "_" || assignment != "=":
 		warn("(%s) Unexpected key format", env)
 		return
 	}
 
-	if !within_context(kind, target) do return
+	fromcfg, cfgalloc := strings.replace_all(target, "_", CTX.tarsep, context.temp_allocator)
+	hyphenated, hyphalloc := strings.replace_all(target, "_", "-", context.temp_allocator)
+
+	withinctx := false
+	for var in ([2]string{fromcfg, hyphenated}) {
+		if kind == "DIR" && strings.equal_fold(var, CTX.usrdir) do withinctx = true
+		if kind == "BRA" && strings.equal_fold(var, CTX.usrbranch) do withinctx = true
+	}
 
 	cmdidx := 0
-	for cmd in strings.split_iterator(&value, CTX.cmdsep) {
+	for cmd in strings.split_iterator(&value, CTX.cmdsep) do if withinctx {
 		fmtcmd := strings.trim_space(cmd)
 		if len(fmtcmd) == 0 do continue
 

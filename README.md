@@ -34,6 +34,7 @@ EVC_<DIR|BRA>_<TARGET>="echo 'foo' ||| echo 'bar'"
 # Replace all underscores in a <TARGET> when matching against the environment.
 # NOTE: Always checked against first before the fallback hyphen(s).
 EVC_TAR_SEP="_"
+
 # Replace the separators between the commands when parsing.
 EVC_CMD_SEP="|||"
 ```
