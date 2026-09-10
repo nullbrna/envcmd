@@ -9,8 +9,6 @@ import "core:strings"
 
 VERSION :: #config(VERSION, "v0.0.0")
 
-CONTEXT: Context
-
 abort :: proc(msg: string, args: ..any) -> ! {
 	fmt.eprint("[\x1b[31mERR\x1b[0m] ")
 	fmt.eprintf(msg, ..args)
@@ -25,64 +23,80 @@ warn :: proc(msg: string, args: ..any) {
 }
 
 Context :: struct {
-	directory, branch:    string,
-	tar_delim, cmd_delim: string,
+	directory, branch: string,
 }
 
-load_context :: proc() {
-	working_dir, wd_err := os.getwd(context.allocator)
-	if wd_err != nil do abort("Failed to read working directory: %v", wd_err)
+context_new :: proc() -> (this: Context) {
+	working_dir, wd_err := os.getwd(context.temp_allocator)
+	if wd_err == nil {
+		this.directory = strings.clone(filepath.base(working_dir), context.allocator)
 
-	CONTEXT.directory = strings.clone(filepath.base(working_dir), context.allocator)
-	delete(working_dir)
+		// Replace common directory characters in-place that won't be present in
+		// the environment variable key. To be searched with [os.get_env].
+		bytes := transmute([]byte)this.directory
+		for &char in bytes do if char == '-' || char == '.' do char = '_'
+	} else do warn("Failed to read working directory: %v", wd_err)
 
 	proc_opts: os.Process_Desc
 	proc_opts.command = {"git", "branch", "--show-current"}
+	proc_state, stdout, stderr, proc_err := os.process_exec(proc_opts, context.temp_allocator)
 
-	proc_state, stdout, stderr, proc_err := os.process_exec(proc_opts, context.allocator)
-	defer delete(stdout)
-	defer delete(stderr)
+	if proc_err == nil && len(stderr) == 0 && proc_state.success {
+		this.branch = strings.clone(strings.trim_space(string(stdout)), context.allocator)
 
-	// Provide a fallback for when the user is NOT within a repository. Avoids a
-	// potential early termination of directory-context commands.
-	if proc_err != nil || len(stderr) > 0 || !proc_state.success {
-		warn("No Git branch found")
-		CONTEXT.branch = strings.clone("", context.allocator)
-	} else {
-		fmt_output := strings.trim_space(string(stdout))
-		CONTEXT.branch = strings.clone(fmt_output, context.allocator)
-	}
+		// Replace common branch characters in-place that won't be present in
+		// the environment variable key. To be searched with [os.get_env].
+		bytes := transmute([]byte)this.branch
+		for &char in bytes do if char == '-' || char == '/' do char = '_'
+	} else do warn("No Git branch found")
 
-	CONTEXT.tar_delim = os.get_env("EVC_TAR_SEP", context.allocator)
-	if len(CONTEXT.tar_delim) == 0 {
-		delete(CONTEXT.tar_delim)
-		CONTEXT.tar_delim = strings.clone("_", context.allocator)
-	}
-
-	CONTEXT.cmd_delim = os.get_env("EVC_CMD_SEP", context.allocator)
-	if len(CONTEXT.cmd_delim) == 0 {
-		delete(CONTEXT.cmd_delim)
-		CONTEXT.cmd_delim = strings.clone("|||", context.allocator)
-	}
+	free_all(context.temp_allocator)
+	return
 }
 
-free_context :: proc(this: ^Context) {
+context_env_values :: proc(this: ^Context) -> (values: [3]string) {
+	ALLOCATOR := context.temp_allocator
+
+	// NOTE: [Context] values can default to empty strings. Although by design,
+	// a corresponding empty key tail can subsequently match and run. To avoid
+	// this, the values are length checked.
+	upper_dir := strings.to_upper(this.directory, ALLOCATOR)
+	upper_branch := strings.to_upper(this.branch, ALLOCATOR)
+
+	if len(this.directory) > 0 {
+		key := fmt.aprintf("EVC_DIR_%s", upper_dir, allocator = ALLOCATOR)
+		values[0] = os.get_env(key, context.allocator)
+	}
+
+	if len(this.branch) > 0 {
+		key := fmt.aprintf("EVC_BRA_%s", upper_branch, allocator = ALLOCATOR)
+		values[1] = os.get_env(key, context.allocator)
+	}
+
+	if len(this.directory) > 0 && len(this.branch) > 0 {
+		key := fmt.aprintf("EVC_ALL_%s__%s", upper_dir, upper_branch, allocator = ALLOCATOR)
+		values[2] = os.get_env(key, context.allocator)
+	}
+
+	free_all(ALLOCATOR)
+	return
+}
+
+context_free :: proc(this: ^Context) {
 	delete(this.directory)
 	delete(this.branch)
-	delete(this.tar_delim)
-	delete(this.cmd_delim)
 
 	this^ = {}
 }
 
-run_command :: proc(idx: int, cmd: string) {
-	fmt.printfln("\x1b[90m→\x1b[22m %s\x1b[0m", cmd)
+run_command :: proc(idx: int, command: string) {
+	fmt.printfln("\x1b[90m→\x1b[22m %s\x1b[0m", command)
 
 	reader, writer, sys_err := os.pipe()
-	if sys_err != nil do abort("Failed to pipe %v: %v", cmd, sys_err)
+	if sys_err != nil do abort("Failed to pipe %q: %v", command, sys_err)
 
 	proc_opts: os.Process_Desc
-	proc_opts.command = {"sh", "-c", cmd}
+	proc_opts.command = {"sh", "-c", command}
 	proc_opts.stdout = writer
 	proc_opts.stderr = writer
 
@@ -90,7 +104,7 @@ run_command :: proc(idx: int, cmd: string) {
 	if proc_err != nil {
 		os.close(reader)
 		os.close(writer)
-		abort("Failed to start %q: %v", cmd, proc_err)
+		abort("Failed to start %q: %v", command, proc_err)
 	}
 
 	// Documentation from [os.pipe] - "When a parent passes one of the ends of
@@ -107,8 +121,8 @@ run_command :: proc(idx: int, cmd: string) {
 	for {
 		line, read_err := bufio.reader_read_string(&buffer, '\n', context.temp_allocator)
 		if len(line) > 0 {
-			cmd_col := colours[idx % len(colours)]
-			fmt.printf("[\x1b[%dm%d\x1b[0m] %s", cmd_col, idx, line)
+			colour := colours[idx % len(colours)]
+			fmt.printf("[\x1b[%dm%d\x1b[0m] %s", colour, idx, line)
 		}
 
 		if read_err == .EOF do break
@@ -117,7 +131,7 @@ run_command :: proc(idx: int, cmd: string) {
 
 		if read_err != nil {
 			os.close(reader)
-			abort("Failed to read output from %q: %v", cmd, read_err)
+			abort("Failed to read output from %q: %v", command, read_err)
 		}
 	}
 
@@ -125,54 +139,12 @@ run_command :: proc(idx: int, cmd: string) {
 	os.close(reader)
 
 	proc_state, wait_err := os.process_wait(process)
-	if wait_err != nil do abort("Failed to complete %q: %v", cmd, wait_err)
-	if !proc_state.success do abort("Non-zero exit code returned from %q", cmd)
+	if wait_err != nil do abort("Failed to complete %q: %v", command, wait_err)
+	if !proc_state.success do abort("Non-zero exit code returned from %q", command)
 
-	fmt.printfln("\x1b[90m←\x1b[22m %s\x1b[0m", cmd)
+	fmt.printfln("\x1b[90m←\x1b[22m %s\x1b[0m", command)
 }
 
-parse_and_start :: proc(env: string) {
-	if !strings.has_prefix(env, "EVC_") do return
-
-	key, assignment, value := strings.partition(env[4:], "=")
-	kind, separator, target := strings.partition(key, "_")
-
-	switch {
-	case kind == "TAR" || kind == "CMD":
-		return
-	case kind != "DIR" && kind != "BRA":
-		warn("Unexpected context kind in %q", env)
-		return
-	case len(target) == 0:
-		warn("Missing context target in %q", env)
-		return
-	case separator != "_" || assignment != "=":
-		warn("Unexpected key format in %q", env)
-		return
-	}
-
-	// NOTE: Replaced allocations (if even made) are always freed at the end of
-	// scope. The 2nd return value can be safely ignored.
-	cfg, _ := strings.replace_all(target, "_", CONTEXT.tar_delim, context.temp_allocator)
-	hyphenated, _ := strings.replace_all(target, "_", "-", context.temp_allocator)
-
-	within_ctx := false
-	for var in ([2]string{cfg, hyphenated}) {
-		if kind == "DIR" && strings.equal_fold(var, CONTEXT.directory) do within_ctx = true
-		if kind == "BRA" && strings.equal_fold(var, CONTEXT.branch) do within_ctx = true
-	}
-
-	cmd_idx := 0
-	for cmd in strings.split_iterator(&value, CONTEXT.cmd_delim) do if within_ctx {
-		fmt_cmd := strings.trim_space(cmd)
-		if len(fmt_cmd) == 0 do continue
-
-		run_command(cmd_idx, fmt_cmd)
-		cmd_idx += 1
-	}
-
-	free_all(context.temp_allocator)
-}
 
 main :: proc() {
 	when ODIN_DEBUG {
@@ -209,17 +181,26 @@ main :: proc() {
 		}
 	}
 
-	load_context()
-	defer free_context(&CONTEXT)
+	ctx := context_new()
+	defer context_free(&ctx)
 
-	env_vars, env_err := os.environ(context.allocator)
-	defer {
-		for env in env_vars do delete(env)
-		delete(env_vars)
+	for value in context_env_values(&ctx) do if len(value) > 0 {
+		command_idx := 0
+		header_copy := value
+
+		// NOTE: Use a cheap header copy. Passing [value] directly would mutate
+		// the owned string and leave an invalid header.
+		for command in strings.split_iterator(&header_copy, "|||") {
+			trimmed := strings.trim_space(command)
+			if len(trimmed) == 0 do continue
+
+			run_command(command_idx, trimmed)
+			command_idx += 1
+		}
+
+		free_all(context.temp_allocator)
+		delete(value)
 	}
-
-	if env_err != nil do abort("Failed to read environment: %v", env_err)
-	for env in env_vars do parse_and_start(env)
 
 	fmt.printfln("\nenvcmd@%s", VERSION)
 }

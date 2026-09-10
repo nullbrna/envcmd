@@ -16,28 +16,19 @@ brew install nullbrna/tap/envcmd
 
 1. Set environment variables in the following format:
 
-```
-EVC_<DIR|BRA>_<TARGET>="echo 'foo' ||| echo 'bar'"
-```
-
-> NOTE: Multiple commands are executed sequentially in-order.
-
-| Part          | Description                                          |
-| ------------- | ---------------------------------------------------- |
-| **DIR / BRA** | Environment type to match against.                   |
-| **TARGET**    | Directory or branch name to run the commands within. |
-
-> NOTE: `TARGET` is first matched as-is. If no match is found, underscores (_)
-> in the target are replaced with hyphens (-) and matched again.
-
 ```sh
-# Replace all underscores in a <TARGET> when matching against the environment.
-# NOTE: Always checked against first before the fallback hyphen(s).
-EVC_TAR_SEP="_"
-
-# Replace the separators between the commands when parsing.
-EVC_CMD_SEP="|||"
+EVC_DIR_ENVCMD="echo 'foo' ||| echo 'bar'"
+EVC_BRA_MAIN="echo 'bar' ||| echo 'foo'"
+EVC_ALL_ENVCMD__MAIN="echo 'foobar' ||| echo 'barfoo'"
 ```
+
+| Part                | Description                                          |
+| ------------------- | ---------------------------------------------------- |
+| **DIR / BRA / ALL** | Environment type to match against.                   |
+| **TARGET**          | Directory or branch name to run the commands within. |
+
+> NOTE: `TARGET` will have some characters (i.e. `-`, `.`, `/` characters)
+> replaced to find a matching environment variable.
 
 2. Run the command:
 

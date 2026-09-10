@@ -5,6 +5,11 @@
         "label": "Debug ENVCMD",
         "cwd": "$ZED_WORKTREE_ROOT",
         "program": "$ZED_WORKTREE_ROOT/bin/envcmd-debug",
+        "env": {
+            "EVC_DIR_ENVCMD": "echo 'foo' ||| echo 'bar'",
+            "EVC_BRA_MAIN": "echo 'bar' ||| echo 'foo'",
+            "EVC_ALL_ENVCMD__MAIN": "echo 'foobar' ||| echo 'barfoo'",
+        },
         "build": {
             "command": "odin",
             "cwd": "$ZED_WORKTREE_ROOT",
@@ -15,11 +20,6 @@
                 "-o:none",
                 "-out:$ZED_WORKTREE_ROOT/bin/envcmd-debug",
             ],
-        },
-        "env": {
-            "EVC_CMD_SEP": "||||",
-            "EVC_DIR_ENVCMD": "echo 'foo' |||| echo 'bar'",
-            "EVC_BRA_MAIN": "echo 'foobar' |||| echo 'barfoo'",
         },
     },
 ]
