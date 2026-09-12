@@ -27,58 +27,51 @@ Context :: struct {
 }
 
 context_new :: proc() -> (this: Context) {
-	working_dir, wd_err := os.getwd(context.temp_allocator)
-	if wd_err == nil {
-		this.directory = strings.clone(filepath.base(working_dir), context.allocator)
+	defer free_all(context.temp_allocator)
 
-		// Replace common directory characters in-place that won't be present in
-		// the environment variable key. To be searched with [os.get_env].
-		bytes := transmute([]byte)this.directory
-		for &char in bytes do if char == '-' || char == '.' do char = '_'
-	} else do warn("Failed to read working directory: %v", wd_err)
+	working_dir, wd_err := os.getwd(context.temp_allocator)
+	if wd_err != nil do abort("Failed to read working directory: %v", wd_err)
+
+	this.directory = strings.to_upper(filepath.base(working_dir), context.allocator)
+	dir_bytes := transmute([]byte)this.directory
+	for &char in dir_bytes do if char == '-' || char == '.' do char = '_'
 
 	proc_opts: os.Process_Desc
 	proc_opts.command = {"git", "branch", "--show-current"}
 	proc_state, stdout, stderr, proc_err := os.process_exec(proc_opts, context.temp_allocator)
+	if proc_err != nil || len(stderr) > 0 || !proc_state.success {
+		warn("No Git branch found")
+		return
+	}
 
-	if proc_err == nil && len(stderr) == 0 && proc_state.success {
-		this.branch = strings.clone(strings.trim_space(string(stdout)), context.allocator)
+	this.branch = strings.to_upper(strings.trim_space(string(stdout)), context.allocator)
+	branch_bytes := transmute([]byte)this.branch
+	for &char in branch_bytes do if char == '-' || char == '/' do char = '_'
 
-		// Replace common branch characters in-place that won't be present in
-		// the environment variable key. To be searched with [os.get_env].
-		bytes := transmute([]byte)this.branch
-		for &char in bytes do if char == '-' || char == '/' do char = '_'
-	} else do warn("No Git branch found")
-
-	free_all(context.temp_allocator)
 	return
 }
 
-context_env_values :: proc(this: ^Context) -> (values: [3]string) {
-	ALLOCATOR := context.temp_allocator
+context_env_values :: proc(this: Context) -> (values: [3]string) {
+	tmp_alloc := context.temp_allocator
 
-	// NOTE: [Context] values can default to empty strings. Although by design,
-	// a corresponding empty key tail can subsequently match and run. To avoid
-	// this, the values are length checked.
-	upper_dir := strings.to_upper(this.directory, ALLOCATOR)
-	upper_branch := strings.to_upper(this.branch, ALLOCATOR)
-
+	// [Context] values can default to zeroed strings. A corresponding empty key
+	// tail can subsequently match and run so values are length checked.
 	if len(this.directory) > 0 {
-		key := fmt.aprintf("EVC_DIR_%s", upper_dir, allocator = ALLOCATOR)
+		key := fmt.aprintf("EVC_DIR_%s", this.directory, allocator = tmp_alloc)
 		values[0] = os.get_env(key, context.allocator)
 	}
 
 	if len(this.branch) > 0 {
-		key := fmt.aprintf("EVC_BRA_%s", upper_branch, allocator = ALLOCATOR)
+		key := fmt.aprintf("EVC_BRA_%s", this.branch, allocator = tmp_alloc)
 		values[1] = os.get_env(key, context.allocator)
 	}
 
 	if len(this.directory) > 0 && len(this.branch) > 0 {
-		key := fmt.aprintf("EVC_ALL_%s__%s", upper_dir, upper_branch, allocator = ALLOCATOR)
+		key := fmt.aprintf("EVC_ALL_%s__%s", this.directory, this.branch, allocator = tmp_alloc)
 		values[2] = os.get_env(key, context.allocator)
 	}
 
-	free_all(ALLOCATOR)
+	free_all(tmp_alloc)
 	return
 }
 
@@ -130,6 +123,7 @@ run_command :: proc(idx: int, command: string) {
 		when ODIN_DEBUG do if read_err == .Unknown do continue
 
 		if read_err != nil {
+			bufio.reader_destroy(&buffer)
 			os.close(reader)
 			abort("Failed to read output from %q: %v", command, read_err)
 		}
@@ -142,21 +136,21 @@ run_command :: proc(idx: int, command: string) {
 	if wait_err != nil do abort("Failed to complete %q: %v", command, wait_err)
 	if !proc_state.success do abort("Non-zero exit code returned from %q", command)
 
+	free_all(context.temp_allocator)
 	fmt.printfln("\x1b[90m←\x1b[22m %s\x1b[0m", command)
 }
 
-
 main :: proc() {
 	when ODIN_DEBUG {
-		dbg_report_allocs :: proc(key: string, track_alloc: ^mem.Tracking_Allocator) {
-			dangling_count := len(track_alloc.allocation_map)
-			if dangling_count == 0 do return
+		dbg_report_allocs :: proc(key: string, allocator: ^mem.Tracking_Allocator) {
+			remaining := len(allocator.allocation_map)
+			if remaining == 0 do return
 
 			count := 1
-			for alloc_ptr in track_alloc.allocation_map {
-				alloc := track_alloc.allocation_map[alloc_ptr]
+			for alloc_ptr in allocator.allocation_map {
+				alloc := allocator.allocation_map[alloc_ptr]
 
-				fmt.eprintf("[\x1b[31m%s\x1b[0m] (%d/%d) ", key, count, dangling_count)
+				fmt.eprintf("[\x1b[31m%s\x1b[0m] (%d/%d) ", key, count, remaining)
 				fmt.eprintf("\x1b[33m%d\x1b[0m byte(s) - %v\n", alloc.size, alloc.location)
 				count += 1
 			}
@@ -172,6 +166,8 @@ main :: proc() {
 		context.allocator = mem.tracking_allocator(&gen_allocator)
 		context.temp_allocator = mem.tracking_allocator(&tmp_allocator)
 
+		// NOTE: Registered first so this runs last (FILO) when [main] exits,
+		// logging any remaining allocations in the tracked allocators.
 		defer {
 			dbg_report_allocs("HEAP", &gen_allocator)
 			mem.tracking_allocator_destroy(&gen_allocator)
@@ -182,14 +178,14 @@ main :: proc() {
 	}
 
 	ctx := context_new()
-	defer context_free(&ctx)
+	all_values := context_env_values(ctx)
 
-	for value in context_env_values(&ctx) do if len(value) > 0 {
-		command_idx := 0
+	for value in all_values do if len(value) > 0 {
+		command_idx := 1
 		header_copy := value
 
-		// NOTE: Use a cheap header copy. Passing [value] directly would mutate
-		// the owned string and leave an invalid header.
+		// NOTE: Copy only the string header. As [split_iterator] mutates,
+		// passing [value] directly would corrupt the owned string header.
 		for command in strings.split_iterator(&header_copy, "|||") {
 			trimmed := strings.trim_space(command)
 			if len(trimmed) == 0 do continue
@@ -197,10 +193,10 @@ main :: proc() {
 			run_command(command_idx, trimmed)
 			command_idx += 1
 		}
-
-		free_all(context.temp_allocator)
-		delete(value)
 	}
+
+	context_free(&ctx)
+	for value in all_values do delete(value)
 
 	fmt.printfln("\nenvcmd@%s", VERSION)
 }

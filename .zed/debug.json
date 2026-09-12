@@ -9,6 +9,11 @@
             "EVC_DIR_ENVCMD": "echo 'foo' ||| echo 'bar'",
             "EVC_BRA_MAIN": "echo 'bar' ||| echo 'foo'",
             "EVC_ALL_ENVCMD__MAIN": "echo 'foobar' ||| echo 'barfoo'",
+            "EVC_FOO": "echo 'impossible'",
+            "EVC_DIR_": "echo 'impossible'",
+            "EVC_BRA_": "echo 'impossible'",
+            "EVC_ALL_": "echo 'impossible'",
+            "EVC_ALL_ENVCMD": "echo 'impossible'",
         },
         "build": {
             "command": "odin",
