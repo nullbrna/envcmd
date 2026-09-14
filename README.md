@@ -2,9 +2,9 @@ Environment-specific and configurable commands.
 
 ## Description
 
-Basic program to alias common commands between environments (directories and
-branches). Mainly used at work to avoid writing the same setup/teardown commands
-across services.
+Basic program to alias common commands between environments (i.e. directories
+and branches). Mainly used at work to avoid writing the same setup/teardown
+commands across services.
 
 ## Installation
 

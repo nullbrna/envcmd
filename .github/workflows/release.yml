@@ -26,10 +26,11 @@ jobs:
 
                   mkdir -p dist && cargo build --release
 
+                  # -C: Move into a directory.
                   # -c: Create an archive.
                   # -z: Use GZIP compression.
                   # -f: Output archive name.
-                  tar -czf "dist/${ARCHIVE}.tar.gz" target/release/envcmd
+                  tar -C target/release -czf "dist/${ARCHIVE}.tar.gz" envcmd
                   echo "ARCHIVE=${ARCHIVE}.tar.gz" >> "$GITHUB_ENV"
 
             - name: Generate Checksum
