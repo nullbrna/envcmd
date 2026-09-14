@@ -1,13 +1,23 @@
 [
     {
-        "label": "Debug Go",
         "request": "launch",
-        "adapter": "Delve",
-        "mode": "debug",
-        "program": ".",
+        "adapter": "CodeLLDB",
+        "label": "Debug ENVCMD",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "sourceLanguages": ["rust"],
+        "build": { "command": "cargo", "args": ["build"] },
+        "program": "$ZED_WORKTREE_ROOT/target/debug/envcmd",
+
         "env": {
-            "EVC_ASYNC_DIR_ENVCMD": "echo 'one', echo 'two'",
-            "EVC_BRA_MAIN": "echo 'foo', echo 'bar'",
+            "EVC_DIR_ENVCMD": "echo 'foo' ||| echo 'bar'",
+            "EVC_BRA_MAIN": "echo 'bar' ||| echo 'foo'",
+            "EVC_ALL_ENVCMD__MAIN": "echo 'foobar' ||| echo 'barfoo'",
+
+            "EVC_FOO": "echo 'impossible'",
+            "EVC_DIR_": "echo 'impossible'",
+            "EVC_BRA_": "echo 'impossible'",
+            "EVC_ALL_": "echo 'impossible'",
+            "EVC_ALL_ENVCMD": "echo 'impossible'",
         },
     },
 ]

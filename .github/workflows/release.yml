@@ -1,0 +1,44 @@
+name: Release
+
+on:
+    push:
+        tags:
+            - "v*"
+
+permissions:
+    contents: write
+
+jobs:
+    release:
+        runs-on: macos-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Build
+              run: |
+                  TAG="${GITHUB_REF_NAME}"
+                  ARCHIVE="envcmd_${TAG}_darwin_arm64"
+
+                  mkdir -p dist && cargo build --release
+
+                  # -c: Create an archive.
+                  # -z: Use GZIP compression.
+                  # -f: Output archive name.
+                  tar -czf "dist/${ARCHIVE}.tar.gz" target/release/envcmd
+                  echo "ARCHIVE=${ARCHIVE}.tar.gz" >> "$GITHUB_ENV"
+
+            - name: Generate Checksum
+              run: |
+                  FILE="dist/${ARCHIVE}"
+                  echo "[CHECKSUM]" && shasum -a 256 "$FILE"
+
+            - name: Create Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: |
+                      dist/*.tar.gz
