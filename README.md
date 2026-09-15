@@ -18,13 +18,13 @@ brew install nullbrna/tap/envcmd
 
 ```sh
 # Only runs in the directory "envcmd" (case-insensitive).
-EVC_DIR_ENVCMD="echo 'foo' ||| echo 'bar'",
+EVC_DIR_ENVCMD="echo 'foo' ||| echo 'bar'"
 
 # Only runs on the Git branch "main" (case-insensitive).
-EVC_BRA_MAIN="echo 'bar' ||| echo 'foo'",
+EVC_BRA_MAIN="echo 'bar' ||| echo 'foo'"
 
-# Only runs when BOTH the above conditions are met.
-EVC_ALL_ENVCMD__MAIN="echo 'foobar' ||| echo 'barfoo'",
+# Only runs when BOTH of the above conditions are met.
+EVC_ALL_ENVCMD__MAIN="echo 'foobar' ||| echo 'barfoo'"
 ```
 
 | Key                 | Description                                            |

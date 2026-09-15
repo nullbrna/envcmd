@@ -18,8 +18,8 @@ impl Context {
             .unwrap_or_default()
             .file_name()
             .and_then(OsStr::to_str)
-            .filter(|name| name.len() > 0)
-            .map(Self::normalise);
+            .map(Self::normalise)
+            .filter(|name| name.len() > 0);
 
         let output = Command::new("git")
             .args(["branch", "--show-current"])
@@ -63,16 +63,18 @@ impl Context {
         let cap = value.len();
         let mut builder = String::with_capacity(cap);
 
-        value.chars().for_each(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                let upper = ch.to_ascii_uppercase();
+        const ENV_DELIM: char = '_';
+
+        value.chars().for_each(|char| {
+            if char.is_ascii_alphanumeric() {
+                let upper = char.to_ascii_uppercase();
                 builder.push(upper);
-            } else if !builder.ends_with('_') {
-                builder.push('_');
+            } else if !builder.ends_with(ENV_DELIM) {
+                builder.push(ENV_DELIM);
             }
         });
 
-        builder.trim_end_matches('_').to_owned()
+        builder.trim_end_matches(ENV_DELIM).to_owned()
     }
 }
 
@@ -124,12 +126,12 @@ fn main() {
 
     context.values().into_iter().flatten().for_each(|value| {
         let mut index = 1;
-        let values = value
+        let commands = value
             .split("|||")
             .map(str::trim)
             .filter(|command| command.len() > 0);
 
-        values.for_each(|command| {
+        commands.for_each(|command| {
             run_command(index, command);
             index += 1;
         });
